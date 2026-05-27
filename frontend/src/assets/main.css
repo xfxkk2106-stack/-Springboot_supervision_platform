@@ -1,0 +1,374 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  --secondary-gradient: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+  --success-gradient: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+  --warm-gradient: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+  --cool-gradient: linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%);
+  --dark-gradient: linear-gradient(135deg, #0c0c1d 0%, #1a1a3e 100%);
+  --glass-bg: rgba(255, 255, 255, 0.85);
+  --glass-border: rgba(255, 255, 255, 0.2);
+  --shadow-soft: 0 8px 32px rgba(31, 38, 135, 0.15);
+  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.08);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'KaiTi', '楷体', 'Inter', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
+  background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
+  min-height: 100vh;
+  color: #1a1a2e;
+  overflow-x: hidden;
+}
+
+/* 全局背景装饰 */
+body::before {
+  content: '';
+  position: fixed;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(circle at 20% 80%, rgba(120, 119, 198, 0.15) 0%, transparent 50%),
+              radial-gradient(circle at 80% 20%, rgba(255, 119, 198, 0.1) 0%, transparent 50%),
+              radial-gradient(circle at 50% 50%, rgba(78, 84, 200, 0.05) 0%, transparent 70%);
+  z-index: -1;
+  animation: float 20s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  33% { transform: translate(30px, -30px) rotate(1deg); }
+  66% { transform: translate(-20px, 20px) rotate(-1deg); }
+}
+
+/* Element Plus 覆盖样式 */
+.el-button--primary {
+  background: var(--primary-gradient) !important;
+  border: none !important;
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4) !important;
+  transition: all 0.3s ease !important;
+}
+
+.el-button--primary:hover {
+  transform: translateY(-2px) !important;
+  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6) !important;
+}
+
+.el-button--primary:active {
+  transform: translateY(0) !important;
+}
+
+.el-button--success {
+  background: var(--success-gradient) !important;
+  border: none !important;
+  box-shadow: 0 4px 15px rgba(79, 172, 254, 0.4) !important;
+}
+
+.el-button--warning {
+  background: var(--warm-gradient) !important;
+  border: none !important;
+  box-shadow: 0 4px 15px rgba(250, 112, 154, 0.4) !important;
+}
+
+.el-button--danger {
+  background: var(--secondary-gradient) !important;
+  border: none !important;
+  box-shadow: 0 4px 15px rgba(245, 87, 108, 0.4) !important;
+}
+
+.el-card {
+  background: var(--glass-bg) !important;
+  backdrop-filter: blur(20px) !important;
+  border: 1px solid var(--glass-border) !important;
+  border-radius: 20px !important;
+  box-shadow: var(--shadow-card) !important;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.el-card:hover {
+  transform: translateY(-4px) !important;
+  box-shadow: var(--shadow-soft) !important;
+}
+
+.el-input__wrapper {
+  background: rgba(255, 255, 255, 0.9) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06) !important;
+  border: 2px solid transparent !important;
+  transition: all 0.3s ease !important;
+}
+
+.el-input__wrapper:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1) !important;
+}
+
+.el-input__wrapper.is-focus {
+  border-color: #667eea !important;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2) !important;
+}
+
+.el-dialog {
+  border-radius: 24px !important;
+  overflow: hidden !important;
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.15) !important;
+}
+
+.el-dialog__header {
+  background: var(--primary-gradient) !important;
+  padding: 20px 24px !important;
+  margin: 0 !important;
+}
+
+.el-dialog__title {
+  color: white !important;
+  font-weight: 600 !important;
+}
+
+.el-dialog__headerbtn .el-dialog__close {
+  color: white !important;
+}
+
+.el-dialog__body {
+  padding: 24px !important;
+}
+
+.el-tag {
+  border-radius: 8px !important;
+  font-weight: 500 !important;
+}
+
+.el-badge__content {
+  font-size: 10px !important;
+}
+
+/* 滚动条美化 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.02);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(135deg, #764ba2, #667eea);
+}
+
+/* 页面切换动画 */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.fade-enter-from {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+.fade-leave-to {
+  opacity: 0;
+  transform: translateY(-10px);
+}
+
+.slide-enter-active,
+.slide-leave-active {
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.slide-enter-from {
+  opacity: 0;
+  transform: translateX(30px);
+}
+
+.slide-leave-to {
+  opacity: 0;
+  transform: translateX(-30px);
+}
+
+/* 工具类 */
+.glass-card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+  border-radius: 20px;
+  box-shadow: var(--shadow-card);
+}
+
+.gradient-text {
+  background: var(--primary-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.hover-lift {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.hover-lift:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-soft);
+}
+
+/* 页面容器 */
+.page-container {
+  min-height: 100vh;
+  padding: 2rem;
+  position: relative;
+}
+
+/* 加载动画 */
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid rgba(102, 126, 234, 0.2);
+  border-top-color: #667eea;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 脉冲动画 */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.animate-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* 进度条动画 */
+@keyframes progress {
+  0% { width: 0%; }
+  100% { width: 100%; }
+}
+
+/* 涟漪效果 */
+.ripple {
+  position: relative;
+  overflow: hidden;
+}
+
+.ripple::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.3);
+  transform: translate(-50%, -50%);
+  transition: width 0.6s, height 0.6s, opacity 0.6s;
+  opacity: 0;
+}
+
+.ripple:active::after {
+  width: 300px;
+  height: 300px;
+  opacity: 0;
+  transition: 0s;
+}
+
+/* ========== 移动端适配 ========== */
+@media (max-width: 768px) {
+  /* 移动端对话框全屏（class 添加在 el-dialog 组件上） */
+  .el-dialog.mobile-dialog,
+  .el-dialog__wrapper.mobile-dialog .el-dialog {
+    width: 100% !important;
+    margin: 0 !important;
+    min-height: 100vh;
+    border-radius: 0 !important;
+  }
+
+  .el-dialog__wrapper.mobile-dialog .el-dialog__body {
+    padding: 16px !important;
+  }
+
+  .el-dialog__wrapper.mobile-dialog .el-dialog__header {
+    padding: 16px !important;
+  }
+
+  /* 顶部导航紧凑 */
+  .mobile-header {
+    padding: 12px 16px !important;
+    margin: 8px 8px 0 !important;
+    border-radius: 16px !important;
+  }
+
+  .mobile-header .header-title {
+    font-size: 16px !important;
+  }
+
+  /* 主内容区 */
+  .mobile-main {
+    padding: 12px 8px !important;
+  }
+
+  /* 卡片间距 */
+  .mobile-card {
+    padding: 16px !important;
+    border-radius: 16px !important;
+  }
+
+  /* 按钮触摸友好 */
+  .el-button {
+    min-height: 44px !important;
+  }
+
+  .el-button--small {
+    min-height: 36px !important;
+  }
+
+  /* 输入框触摸友好 */
+  .el-input__inner {
+    height: 44px !important;
+    font-size: 16px !important; /* 防止iOS缩放 */
+  }
+
+  /* 上传组件适配 */
+  .el-upload--picture-card {
+    width: 80px !important;
+    height: 80px !important;
+  }
+
+  .el-upload-list__item {
+    width: 80px !important;
+    height: 80px !important;
+  }
+
+  /* 隐藏桌面端装饰 */
+  .desktop-only {
+    display: none !important;
+  }
+}
+
+@media (min-width: 769px) {
+  .mobile-only {
+    display: none !important;
+  }
+}
