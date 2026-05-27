@@ -29,6 +29,9 @@ public class ReviewService {
     @Autowired
     private EvidenceReviewMapper evidenceReviewMapper;
 
+    @Autowired
+    private TaskService taskService;
+
     public DailyReview createOrUpdateReview(Long memberId, String summary, Integer moodRating) {
         DailyReview review = reviewMapper.selectOne(
                 new LambdaQueryWrapper<DailyReview>()
@@ -92,28 +95,33 @@ public class ReviewService {
     }
 
     private boolean canCreateTomorrowPlan(Long memberId, Long roomId) {
-        // 1. 检查今日所有任务是否完成
-        List<DailyTask> todayTasks = taskMapper.selectByMemberAndDate(memberId, LocalDate.now());
-        if (todayTasks.isEmpty()) {
-            return false;
+        // 0. 如果当前用户请假，跳过个人任务检查
+        if (!taskService.isOnLeave(memberId)) {
+            // 1. 检查今日所有任务是否完成
+            List<DailyTask> todayTasks = taskMapper.selectByMemberAndDate(memberId, LocalDate.now());
+            if (todayTasks.isEmpty()) {
+                return false;
+            }
+            boolean allCompleted = todayTasks.stream().allMatch(t -> t.getIsCompleted() == 1);
+            if (!allCompleted) {
+                return false;
+            }
         }
 
-        boolean allCompleted = todayTasks.stream().allMatch(t -> t.getIsCompleted() == 1);
-        if (!allCompleted) {
-            return false;
-        }
-
-        // 2. 检查是否审核完对方的证据
-        // 获取房间内其他成员今日任务的证据
+        // 2. 检查是否审核完对方的证据（跳过请假成员的证据）
         List<DailyTask> roomTasks = taskMapper.selectByRoomAndDate(roomId, LocalDate.now());
         for (DailyTask task : roomTasks) {
             if (!task.getMemberId().equals(memberId)) {
+                // 跳过请假成员的任务
+                if (taskService.isOnLeave(task.getMemberId())) {
+                    continue;
+                }
                 List<TaskEvidence> evidences = evidenceMapper.selectList(
                         new LambdaQueryWrapper<TaskEvidence>()
                                 .eq(TaskEvidence::getTaskId, task.getId())
                 );
                 for (TaskEvidence evidence : evidences) {
-                    if (evidence.getStatus() == 0) { // 有未审核的证据
+                    if (evidence.getStatus() == 0) {
                         return false;
                     }
                 }

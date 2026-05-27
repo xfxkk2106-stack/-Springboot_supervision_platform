@@ -155,6 +155,29 @@ public class RoomService {
     }
 
     /**
+     * 退出房间（非管理员）
+     */
+    public void leaveRoom(Long memberId, Long roomId) {
+        RoomMember member = roomMemberMapper.selectById(memberId);
+        if (member == null || !member.getRoomId().equals(roomId)) {
+            throw new BusinessException("您不在此房间中");
+        }
+        if (member.getIsAdmin() == 1) {
+            throw new BusinessException("管理员不能退出房间，请使用注销房间功能");
+        }
+
+        // 删除成员记录
+        roomMemberMapper.deleteById(memberId);
+
+        // 通知房间内其他成员（使用 member_left 区分主动退出和断线）
+        String roomCode = roomMapper.selectById(roomId).getRoomCode();
+        Map<String, Object> data = new HashMap<>();
+        data.put("memberId", memberId);
+        data.put("displayName", member.getDisplayName());
+        NettyWebSocketServer.sendToRoom(roomCode, "member_left", data);
+    }
+
+    /**
      * 检查用户是否为房间管理员
      */
     public boolean isAdmin(Long memberId, Long roomId) {

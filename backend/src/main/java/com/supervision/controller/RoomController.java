@@ -41,6 +41,14 @@ public class RoomController {
         return Result.success(roomService.getRoomMembers(roomCode));
     }
 
+    @PostMapping("/leave")
+    public Result<?> leaveRoom(HttpServletRequest request) {
+        Long memberId = (Long) request.getAttribute("memberId");
+        Long roomId = (Long) request.getAttribute("roomId");
+        roomService.leaveRoom(memberId, roomId);
+        return Result.success("已退出房间");
+    }
+
     @PostMapping("/dissolve")
     public Result<?> dissolveRoom(HttpServletRequest request) {
         Long memberId = (Long) request.getAttribute("memberId");

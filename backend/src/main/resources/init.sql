@@ -95,6 +95,16 @@ CREATE TABLE IF NOT EXISTS tomorrow_plan (
     FOREIGN KEY (member_id) REFERENCES room_member(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='明日计划表';
 
+-- 每日请假表
+CREATE TABLE IF NOT EXISTS daily_leave (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    member_id BIGINT NOT NULL COMMENT '成员ID',
+    leave_date DATE NOT NULL COMMENT '请假日期',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_member_date (member_id, leave_date),
+    FOREIGN KEY (member_id) REFERENCES room_member(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='每日请假表';
+
 -- 每日复盘表
 CREATE TABLE IF NOT EXISTS daily_review (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,

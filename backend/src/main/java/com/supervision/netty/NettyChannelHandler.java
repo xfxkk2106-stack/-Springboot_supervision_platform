@@ -207,13 +207,17 @@ public class NettyChannelHandler extends SimpleChannelInboundHandler<Object> {
             }
         }
 
-        // 更新数据库离线状态
+        // 更新数据库离线状态（如果成员还存在）
+        boolean memberExists = true;
         try {
             RoomMemberMapper mapper = SpringContextHolder.getBean(RoomMemberMapper.class);
             RoomMember member = mapper.selectById(memberId);
             if (member != null) {
                 member.setIsOnline(0);
                 mapper.updateById(member);
+            } else {
+                // 成员已被删除（主动退出房间），跳过广播
+                memberExists = false;
             }
         } catch (Exception e) {
             log.error("更新离线状态失败", e);
@@ -231,8 +235,8 @@ public class NettyChannelHandler extends SimpleChannelInboundHandler<Object> {
             }
         }
 
-        // 通知房间内其他成员
-        if (!hasOtherSession) {
+        // 通知房间内其他成员（仅当成员未被主动删除时）
+        if (!hasOtherSession && memberExists) {
             Map<String, Object> data = new HashMap<>();
             data.put("memberId", memberId);
             data.put("displayName", displayName);

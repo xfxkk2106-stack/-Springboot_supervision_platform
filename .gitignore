@@ -42,3 +42,7 @@ build/
 *.h5
 *.gguf
 *.safetensors
+
+# 部署文件和编译产物
+deploy/
+backend/target/

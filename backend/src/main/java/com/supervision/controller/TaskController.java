@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/task")
@@ -74,5 +75,25 @@ public class TaskController {
         Long memberId = (Long) request.getAttribute("memberId");
         taskService.deleteTask(memberId, id);
         return Result.success();
+    }
+
+    @PostMapping("/leave")
+    public Result<?> requestLeave(HttpServletRequest request) {
+        Long memberId = (Long) request.getAttribute("memberId");
+        taskService.requestLeave(memberId);
+        return Result.success("已请假");
+    }
+
+    @DeleteMapping("/leave")
+    public Result<?> cancelLeave(HttpServletRequest request) {
+        Long memberId = (Long) request.getAttribute("memberId");
+        taskService.cancelLeave(memberId);
+        return Result.success("已取消请假");
+    }
+
+    @GetMapping("/room-status")
+    public Result<Map<String, Object>> getRoomStatus(HttpServletRequest request) {
+        Long roomId = (Long) request.getAttribute("roomId");
+        return Result.success(taskService.getRoomCompletionStatus(roomId));
     }
 }

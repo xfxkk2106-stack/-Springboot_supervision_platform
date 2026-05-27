@@ -44,6 +44,13 @@ export const useRoomStore = defineStore('room', () => {
     }
   }
 
+  function removeMember(memberId) {
+    const index = members.value.findIndex(m => m.id === memberId)
+    if (index !== -1) {
+      members.value.splice(index, 1)
+    }
+  }
+
   return {
     roomInfo,
     members,
@@ -54,5 +61,6 @@ export const useRoomStore = defineStore('room', () => {
     fetchMembers,
     updateMemberStatus,
     addMember,
+    removeMember,
   }
 })

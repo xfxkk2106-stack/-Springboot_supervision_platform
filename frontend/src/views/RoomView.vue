@@ -5,16 +5,16 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { useRoomStore } from '@/stores/room'
 import { useWebSocket } from '@/composables/useWebSocket'
-import { getMyTodayTasks, getMemberTodayTasks, getMemberHistoryTasks, createTask, completeTask, deleteTask } from '@/api/task'
+import { getMyTodayTasks, getMemberTodayTasks, getMemberHistoryTasks, createTask, completeTask, deleteTask, requestLeave, cancelLeave, getRoomStatus } from '@/api/task'
 import { uploadEvidence, getTaskEvidence, deleteEvidence } from '@/api/evidence'
 import { getTomorrowPlan, createTomorrowPlan } from '@/api/review'
-import { dissolveRoom, checkAdmin } from '@/api/room'
+import { dissolveRoom, checkAdmin, leaveRoom } from '@/api/room'
 
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const roomStore = useRoomStore()
-const { isConnected, on, send } = useWebSocket()
+const { isConnected, on, send, close } = useWebSocket()
 
 const roomCode = route.params.roomCode
 
@@ -81,6 +81,10 @@ const historyTasks = ref([])
 // 加载状态
 const loading = ref(false)
 
+// 请假相关
+const isOnLeave = ref(false)
+const roomStatus = ref(null)
+
 // 我的任务按科目分组
 const myTasksBySubject = computed(() => {
   const groups = {}
@@ -121,13 +125,22 @@ const memberProgress = computed(() => {
 
 // 是否可以制定明日计划
 const canCreateTomorrow = computed(() => {
-  return myTasks.value.length > 0 && myTasks.value.every(t => t.isCompleted)
+  if (isOnLeave.value) return true
+  if (!roomStatus.value) return false
+  return roomStatus.value.allCompleted
+})
+
+// 是否被锁定（0点后有人未完成）
+const isLocked = computed(() => {
+  if (!roomStatus.value) return false
+  return !roomStatus.value.allCompleted
 })
 
 onMounted(async () => {
   await roomStore.fetchRoomInfo(roomCode)
   await roomStore.fetchMembers(roomCode)
   await fetchMyTasks()
+  await fetchRoomStatus()
 
   // 检查是否为管理员
   try {
@@ -160,6 +173,11 @@ onMounted(async () => {
     roomStore.updateMemberStatus(data.memberId, false)
   })
 
+  on('member_left', (data) => {
+    roomStore.removeMember(data.memberId)
+    ElMessage.info(`${data.displayName} 已退出房间`)
+  })
+
   on('room_online_members', (data) => {
     // 收到房间内已在线成员列表，更新状态
     if (Array.isArray(data)) {
@@ -171,15 +189,49 @@ onMounted(async () => {
 
   on('task_completed', (data) => {
     fetchMyTasks()
+    // 优先使用 WebSocket 广播中携带的房间状态（即时更新，无需额外 REST 请求）
+    if (data?.roomStatus) {
+      roomStatus.value = data.roomStatus
+      const myStatus = data.roomStatus.members?.find(m => m.memberId === authStore.memberId)
+      if (myStatus) {
+        isOnLeave.value = myStatus.isOnLeave
+      }
+    } else {
+      fetchRoomStatus()
+    }
+  })
+
+  on('member_leave_changed', (data) => {
+    fetchRoomStatus()
+  })
+
+  on('tomorrow_converted', (data) => {
+    fetchMyTasks()
+    fetchRoomStatus()
+    ElMessage.info('明日计划已转为今日任务')
   })
 
   on('task_created', (data) => {
     fetchMyTasks()
+    fetchRoomStatus()
   })
 
   on('evidence_reviewed', (data) => {
-    ElMessage.info(`您的学习证据已${data.result === 1 ? '通过' : '被驳回'}`)
+    // 只对证据上传者显示通知
+    if (data.memberId === authStore.memberId) {
+      ElMessage.info(`您的学习证据已${data.result === 1 ? '通过' : '被驳回'}`)
+    }
     fetchMyTasks()
+    // 使用广播中的 roomStatus 即时更新（审核通过会自动完成任务，需刷新房间状态）
+    if (data?.roomStatus) {
+      roomStatus.value = data.roomStatus
+      const myStatus = data.roomStatus.members?.find(m => m.memberId === authStore.memberId)
+      if (myStatus) {
+        isOnLeave.value = myStatus.isOnLeave
+      }
+    } else {
+      fetchRoomStatus()
+    }
   })
 
   on('room_dissolved', () => {
@@ -208,8 +260,65 @@ async function fetchMyTasks() {
   try {
     const res = await getMyTodayTasks()
     myTasks.value = res.data || []
+    // 如果有任务，说明不在请假状态
+    if (myTasks.value.length > 0) {
+      isOnLeave.value = false
+    }
   } catch (error) {
     myTasks.value = []
+  }
+}
+
+// 获取房间完成状态
+async function fetchRoomStatus() {
+  try {
+    const res = await getRoomStatus()
+    roomStatus.value = res.data
+    // 检查自己是否请假
+    const myStatus = roomStatus.value?.members?.find(m => m.memberId === authStore.memberId)
+    if (myStatus) {
+      isOnLeave.value = myStatus.isOnLeave
+    }
+  } catch (error) {
+    roomStatus.value = null
+  }
+}
+
+// 请假
+async function handleRequestLeave() {
+  try {
+    await ElMessageBox.confirm('请假后今日任务将被删除，确定请假？', '请假确认', {
+      confirmButtonText: '确认请假',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+    loading.value = true
+    await requestLeave()
+    isOnLeave.value = true
+    myTasks.value = []
+    await fetchRoomStatus()
+    ElMessage.success('已请假')
+  } catch (error) {
+    if (error !== 'cancel') {
+      // 错误已在拦截器中处理
+    }
+  } finally {
+    loading.value = false
+  }
+}
+
+// 取消请假
+async function handleCancelLeave() {
+  try {
+    loading.value = true
+    await cancelLeave()
+    isOnLeave.value = false
+    await fetchRoomStatus()
+    ElMessage.success('已取消请假')
+  } catch (error) {
+    // 错误已在拦截器中处理
+  } finally {
+    loading.value = false
   }
 }
 
@@ -422,6 +531,8 @@ async function handleCompleteTask(taskId) {
     }
     ElMessage.success('任务已完成')
     send('task_completed', { taskId })
+    // 刷新房间状态，实时解锁明日计划按钮
+    await fetchRoomStatus()
   } catch (error) {
     if (error !== 'cancel') {
       // 错误已在拦截器中处理
@@ -528,7 +639,13 @@ function handleLogout() {
     confirmButtonText: '确认退出',
     cancelButtonText: '取消',
     type: 'warning',
-  }).then(() => {
+  }).then(async () => {
+    try {
+      await leaveRoom()
+    } catch (e) {
+      // 即使API失败也继续退出
+    }
+    close()
     authStore.clearAuth()
     router.push('/')
   }).catch(() => {})
@@ -536,7 +653,7 @@ function handleLogout() {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+  <div class="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 page-bg">
     <!-- 顶部导航 -->
     <header class="glass-card mx-2 sm:mx-4 mt-2 sm:mt-4 px-3 sm:px-6 py-3 sm:py-4 sticky top-2 sm:top-4 z-50">
       <!-- 移动端：紧凑单行布局 -->
@@ -649,7 +766,7 @@ function handleLogout() {
                 v-for="member in roomStore.members"
                 :key="member.id"
                 @click="viewMemberTasks(member)"
-                class="flex items-center p-3 rounded-xl bg-white/50 hover:bg-white/80 transition-all duration-300 cursor-pointer hover:shadow-md"
+                class="flex items-center p-3 rounded-xl bg-white/50 hover:bg-white/80 cursor-pointer hover-lift"
               >
                 <div class="relative">
                   <div class="w-10 h-10 rounded-full bg-gradient-to-br from-primary-400 to-secondary-400 flex items-center justify-center text-white font-bold">
@@ -693,15 +810,21 @@ function handleLogout() {
                 <el-icon class="mr-2"><Plus /></el-icon>
                 添加今日任务
               </el-button>
-              <el-button
-                type="success"
-                class="w-full !rounded-xl !h-12"
-                @click="showTomorrowDialog = true"
-                :disabled="!canCreateTomorrow"
+              <el-tooltip
+                :content="isLocked ? '有成员未完成今日任务，无法制定明日计划' : ''"
+                :disabled="!isLocked"
+                placement="top"
               >
-                <el-icon class="mr-2"><Calendar /></el-icon>
-                制定明日计划
-              </el-button>
+                <el-button
+                  type="success"
+                  class="w-full !rounded-xl !h-12"
+                  @click="showTomorrowDialog = true"
+                  :disabled="!canCreateTomorrow"
+                >
+                  <el-icon class="mr-2"><Calendar /></el-icon>
+                  制定明日计划
+                </el-button>
+              </el-tooltip>
               <el-button
                 type="warning"
                 class="w-full !rounded-xl !h-12"
@@ -734,14 +857,61 @@ function handleLogout() {
             </div>
           </div>
 
+          <!-- 房间锁定状态（有人未完成时显示） -->
+          <div v-if="isLocked && roomStatus" class="glass-card p-4 sm:p-6 mb-4 sm:mb-6 border-2 border-warning-200 bg-warning-50/50">
+            <div class="flex items-center mb-3">
+              <el-icon class="text-xl text-warning-500 mr-2"><WarningFilled /></el-icon>
+              <h3 class="font-semibold text-gray-800">有成员未完成今日任务</h3>
+            </div>
+            <p class="text-sm text-gray-500 mb-4">全员完成后才能进入明日计划学习</p>
+            <div class="space-y-2">
+              <div
+                v-for="m in roomStatus.members"
+                :key="m.memberId"
+                class="flex items-center justify-between p-2 rounded-lg bg-white"
+              >
+                <div class="flex items-center">
+                  <div
+                    :class="[
+                      'w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold mr-2',
+                      m.allDone
+                        ? 'bg-gradient-to-br from-success-400 to-success-500'
+                        : 'bg-gradient-to-br from-gray-300 to-gray-400'
+                    ]"
+                  >
+                    {{ m.displayName?.charAt(0) || '?' }}
+                  </div>
+                  <span class="text-sm text-gray-700">{{ m.displayName }}</span>
+                </div>
+                <div>
+                  <el-tag v-if="m.isOnLeave" size="small" type="warning" effect="plain" class="!rounded-md">
+                    已请假
+                  </el-tag>
+                  <el-tag v-else-if="m.allDone" size="small" type="success" effect="plain" class="!rounded-md">
+                    已完成
+                  </el-tag>
+                  <el-tag v-else size="small" type="info" effect="plain" class="!rounded-md">
+                    {{ m.completedTasks }}/{{ m.totalTasks }}
+                  </el-tag>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- 移动端快捷操作按钮 -->
           <div class="flex lg:hidden gap-2 mb-4">
             <el-button type="primary" class="flex-1 !rounded-xl !h-11" @click="showTaskDialog = true">
               <el-icon class="mr-1"><Plus /></el-icon> 添加任务
             </el-button>
-            <el-button type="success" class="flex-1 !rounded-xl !h-11" @click="showTomorrowDialog = true" :disabled="!canCreateTomorrow">
-              <el-icon class="mr-1"><Calendar /></el-icon> 明日计划
-            </el-button>
+            <el-tooltip
+              :content="isLocked ? '有成员未完成' : ''"
+              :disabled="!isLocked"
+              placement="top"
+            >
+              <el-button type="success" class="flex-1 !rounded-xl !h-11" @click="showTomorrowDialog = true" :disabled="!canCreateTomorrow">
+                <el-icon class="mr-1"><Calendar /></el-icon> 明日计划
+              </el-button>
+            </el-tooltip>
             <el-button type="warning" class="flex-1 !rounded-xl !h-11" @click="goReview">
               <el-icon class="mr-1"><Checked /></el-icon> 审核
             </el-button>
@@ -751,26 +921,53 @@ function handleLogout() {
           <div class="glass-card p-4 sm:p-6 mobile-card">
             <div class="flex items-center justify-between mb-4 sm:mb-6">
               <h2 class="text-base sm:text-lg font-semibold text-gray-800">我的学习计划</h2>
-              <el-button
-                type="primary"
-                size="small"
-                @click="showTaskDialog = true"
-                class="!rounded-lg"
-              >
-                <el-icon class="mr-1"><Plus /></el-icon>
-                添加
+              <div class="flex gap-2">
+                <el-button
+                  size="small"
+                  @click="handleRequestLeave"
+                  :loading="loading"
+                  class="!rounded-lg"
+                >
+                  请假
+                </el-button>
+                <el-button
+                  type="primary"
+                  size="small"
+                  @click="showTaskDialog = true"
+                  class="!rounded-lg"
+                >
+                  <el-icon class="mr-1"><Plus /></el-icon>
+                  添加
+                </el-button>
+              </div>
+            </div>
+
+            <!-- 请假状态 -->
+            <div v-if="isOnLeave" class="text-center py-12">
+              <div class="w-20 h-20 mx-auto mb-4 rounded-full bg-warning-50 flex items-center justify-center">
+                <el-icon class="text-4xl text-warning-400"><Calendar /></el-icon>
+              </div>
+              <p class="text-gray-600 font-medium mb-2">今日已请假</p>
+              <p class="text-gray-400 text-sm mb-4">请假后今日无学习计划，不影响其他成员</p>
+              <el-button type="warning" @click="handleCancelLeave" :loading="loading" class="!rounded-xl">
+                取消请假
               </el-button>
             </div>
 
             <!-- 空状态 -->
-            <div v-if="myTasks.length === 0" class="text-center py-12">
+            <div v-else-if="myTasks.length === 0" class="text-center py-12">
               <div class="w-20 h-20 mx-auto mb-4 rounded-full bg-gray-100 flex items-center justify-center">
                 <el-icon class="text-4xl text-gray-300"><Document /></el-icon>
               </div>
               <p class="text-gray-400 mb-4">还没有学习计划</p>
-              <el-button type="primary" @click="showTaskDialog = true" class="!rounded-xl">
-                创建第一个任务
-              </el-button>
+              <div class="flex gap-3 justify-center">
+                <el-button type="primary" @click="showTaskDialog = true" class="!rounded-xl">
+                  创建第一个任务
+                </el-button>
+                <el-button @click="handleRequestLeave" :loading="loading" class="!rounded-xl">
+                  今日请假
+                </el-button>
+              </div>
             </div>
 
             <!-- 按科目分组显示 -->
@@ -793,10 +990,10 @@ function handleLogout() {
                     v-for="task in tasks"
                     :key="task.id"
                     :class="[
-                      'flex items-center p-3 sm:p-4 rounded-xl transition-all duration-300',
+                      'flex items-center p-3 sm:p-4 rounded-xl',
                       task.isCompleted
                         ? 'bg-success-50 border border-success-200'
-                        : 'bg-white hover:shadow-md border border-gray-100'
+                        : 'bg-white hover-lift border border-gray-100'
                     ]"
                   >
                     <el-checkbox
@@ -1318,7 +1515,7 @@ function handleLogout() {
 
 .evidence-upload :deep(.el-upload--picture-card:hover) {
   border-color: #667eea;
-  background: #f0f9ff;
+  background: #f0f1fe;
 }
 
 .evidence-upload :deep(.el-upload-list__item) {

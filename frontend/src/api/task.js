@@ -34,3 +34,18 @@ export function completeTask(id) {
 export function deleteTask(id) {
   return request.delete(`/task/${id}`)
 }
+
+// 请假
+export function requestLeave() {
+  return request.post('/task/leave')
+}
+
+// 取消请假
+export function cancelLeave() {
+  return request.delete('/task/leave')
+}
+
+// 获取房间完成状态
+export function getRoomStatus() {
+  return request.get('/task/room-status')
+}

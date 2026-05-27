@@ -20,6 +20,11 @@ export function getRoomMembers(roomCode) {
   return request.get(`/room/${roomCode}/members`)
 }
 
+// 退出房间
+export function leaveRoom() {
+  return request.post('/room/leave')
+}
+
 // 注销房间（管理员）
 export function dissolveRoom() {
   return request.post('/room/dissolve')

@@ -46,6 +46,9 @@ public class EvidenceService {
     @Autowired
     private MinioService minioService;
 
+    @Autowired
+    private TaskService taskService;
+
     public List<TaskEvidence> uploadEvidence(Long taskId, MultipartFile[] files) throws IOException {
         List<TaskEvidence> evidences = new ArrayList<>();
 
@@ -124,18 +127,21 @@ public class EvidenceService {
             }
         }
 
-        // 通过 WebSocket 通知被审核人
+        // 通过 WebSocket 通知（含房间完成状态，实现即时更新）
         if (task != null) {
             try {
                 RoomMember member = roomMemberMapper.selectById(task.getMemberId());
                 if (member != null) {
                     Room room = roomMapper.selectById(member.getRoomId());
                     if (room != null) {
+                        Map<String, Object> roomStatus = taskService.calculateRoomStatus(room.getId());
+
                         Map<String, Object> wsData = new HashMap<>();
                         wsData.put("evidenceId", evidenceId);
                         wsData.put("result", dto.getResult());
                         wsData.put("taskId", task.getId());
                         wsData.put("memberId", task.getMemberId());
+                        wsData.put("roomStatus", roomStatus);
                         NettyWebSocketServer.sendToRoom(room.getRoomCode(), "evidence_reviewed", wsData);
                     }
                 }
