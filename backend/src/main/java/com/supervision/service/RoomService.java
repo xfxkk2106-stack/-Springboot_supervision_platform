@@ -29,6 +29,9 @@ public class RoomService {
     @Autowired
     private com.supervision.config.JwtConfig jwtConfig;
 
+    @Autowired
+    private TaskService taskService;
+
     public Map<String, Object> createRoom(RoomCreateDTO dto) {
         // 生成唯一房间号
         String roomCode = generateUniqueRoomCode();
@@ -174,6 +177,8 @@ public class RoomService {
         Map<String, Object> data = new HashMap<>();
         data.put("memberId", memberId);
         data.put("displayName", member.getDisplayName());
+        // 携带最新房间状态，移除已退出成员后重新计算
+        data.put("roomStatus", taskService.calculateRoomStatus(roomId));
         NettyWebSocketServer.sendToRoom(roomCode, "member_left", data);
     }
 

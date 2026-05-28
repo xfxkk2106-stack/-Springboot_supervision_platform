@@ -6,6 +6,7 @@ import { createRoom, joinRoom } from '@/api/room'
 import { verifyToken } from '@/api/auth'
 import { useAuthStore } from '@/stores/auth'
 import { validateRoomCode } from '@/utils/roomCode'
+import { copyToClipboard } from '@/utils/clipboard'
 
 const router = useRouter()
 const route = useRoute()
@@ -108,16 +109,24 @@ async function handleCreate() {
 }
 
 // 复制邀请码
-function copyInviteCode() {
-  navigator.clipboard.writeText(inviteCode.value)
-  ElMessage.success('邀请码已复制')
+async function copyInviteCode() {
+  const success = await copyToClipboard(inviteCode.value)
+  if (success) {
+    ElMessage.success('邀请码已复制')
+  } else {
+    ElMessage.error('复制失败，请手动复制')
+  }
 }
 
 // 复制邀请链接
-function copyInviteLink() {
+async function copyInviteLink() {
   const link = `${window.location.origin}?invite=${inviteCode.value}`
-  navigator.clipboard.writeText(link)
-  ElMessage.success('邀请链接已复制')
+  const success = await copyToClipboard(link)
+  if (success) {
+    ElMessage.success('邀请链接已复制')
+  } else {
+    ElMessage.error('复制失败，请手动复制')
+  }
 }
 
 // 进入房间

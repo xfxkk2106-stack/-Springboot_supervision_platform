@@ -9,12 +9,13 @@ import { getMyTodayTasks, getMemberTodayTasks, getMemberHistoryTasks, createTask
 import { uploadEvidence, getTaskEvidence, deleteEvidence } from '@/api/evidence'
 import { getTomorrowPlan, createTomorrowPlan } from '@/api/review'
 import { dissolveRoom, checkAdmin, leaveRoom } from '@/api/room'
+import { copyToClipboard } from '@/utils/clipboard'
 
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const roomStore = useRoomStore()
-const { isConnected, on, send, close } = useWebSocket()
+const { on, send, close } = useWebSocket()
 
 const roomCode = route.params.roomCode
 
@@ -137,10 +138,13 @@ const isLocked = computed(() => {
 })
 
 onMounted(async () => {
-  await roomStore.fetchRoomInfo(roomCode)
-  await roomStore.fetchMembers(roomCode)
-  await fetchMyTasks()
-  await fetchRoomStatus()
+  // 并行初始化，互不阻塞
+  await Promise.allSettled([
+    roomStore.fetchRoomInfo(roomCode),
+    roomStore.fetchMembers(roomCode),
+    fetchMyTasks(),
+    fetchRoomStatus(),
+  ])
 
   // 检查是否为管理员
   try {
@@ -165,6 +169,8 @@ onMounted(async () => {
         isOnline: 1,
       })
       roomStore.fetchMembers(roomCode)
+      // 刷新房间完成状态，更新"有成员未完成今日任务"列表
+      fetchRoomStatus()
     }
     ElMessage.info(`${data.displayName} 上线了`)
   })
@@ -176,6 +182,16 @@ onMounted(async () => {
   on('member_left', (data) => {
     roomStore.removeMember(data.memberId)
     ElMessage.info(`${data.displayName} 已退出房间`)
+    // 使用广播中的 roomStatus 即时更新房间完成状态
+    if (data?.roomStatus) {
+      roomStatus.value = data.roomStatus
+      const myStatus = data.roomStatus.members?.find(m => m.memberId === authStore.memberId)
+      if (myStatus) {
+        isOnLeave.value = myStatus.isOnLeave
+      }
+    } else {
+      fetchRoomStatus()
+    }
   })
 
   on('room_online_members', (data) => {
@@ -272,7 +288,9 @@ async function fetchMyTasks() {
 // 获取房间完成状态
 async function fetchRoomStatus() {
   try {
+    console.log('[fetchRoomStatus] 开始请求 /api/task/room-status')
     const res = await getRoomStatus()
+    console.log('[fetchRoomStatus] 响应:', res)
     roomStatus.value = res.data
     // 检查自己是否请假
     const myStatus = roomStatus.value?.members?.find(m => m.memberId === authStore.memberId)
@@ -280,6 +298,7 @@ async function fetchRoomStatus() {
       isOnLeave.value = myStatus.isOnLeave
     }
   } catch (error) {
+    console.error('[fetchRoomStatus] 失败:', error)
     roomStatus.value = null
   }
 }
@@ -588,16 +607,24 @@ async function handleCreateTomorrow() {
 }
 
 // 复制邀请码
-function copyInviteCode() {
-  navigator.clipboard.writeText(roomCode)
-  ElMessage.success('邀请码已复制')
+async function copyInviteCode() {
+  const success = await copyToClipboard(roomCode)
+  if (success) {
+    ElMessage.success('邀请码已复制')
+  } else {
+    ElMessage.error('复制失败，请手动复制')
+  }
 }
 
 // 复制邀请链接
-function copyInviteLink() {
+async function copyInviteLink() {
   const link = `${window.location.origin}?invite=${roomCode}`
-  navigator.clipboard.writeText(link)
-  ElMessage.success('邀请链接已复制')
+  const success = await copyToClipboard(link)
+  if (success) {
+    ElMessage.success('邀请链接已复制')
+  } else {
+    ElMessage.error('复制失败，请手动复制')
+  }
 }
 
 // 注销房间（管理员）
@@ -635,20 +662,27 @@ function goPlan() {
 
 // 退出房间（非管理员）
 function handleLogout() {
+  console.log('[handleLogout] 点击退出房间')
   ElMessageBox.confirm('确认退出房间？', '提示', {
     confirmButtonText: '确认退出',
     cancelButtonText: '取消',
     type: 'warning',
   }).then(async () => {
+    console.log('[handleLogout] 确认退出，发送API请求')
     try {
-      await leaveRoom()
+      const res = await leaveRoom()
+      console.log('[handleLogout] 退出成功:', res)
+      ElMessage.success('已退出房间')
     } catch (e) {
-      // 即使API失败也继续退出
+      console.error('[handleLogout] 退出房间API失败:', e)
+      ElMessage.warning('退出请求失败，但仍将离开房间')
     }
     close()
     authStore.clearAuth()
     router.push('/')
-  }).catch(() => {})
+  }).catch(() => {
+    console.log('[handleLogout] 用户取消退出')
+  })
 }
 </script>
 
@@ -665,9 +699,6 @@ function handleLogout() {
           </el-tag>
           <el-tag v-if="isAdmin" type="warning" effect="plain" class="!rounded-lg !text-xs sm:!text-sm desktop-only">
             管理员
-          </el-tag>
-          <el-tag :type="isConnected ? 'success' : 'danger'" effect="plain" class="!rounded-lg !text-xs sm:!text-sm">
-            {{ isConnected ? '在线' : '离线' }}
           </el-tag>
         </div>
 
@@ -744,12 +775,6 @@ function handleLogout() {
                   <div class="w-12 h-12 rounded-full bg-gradient-to-br from-primary-400 to-secondary-400 flex items-center justify-center text-white font-bold">
                     {{ member.displayName.charAt(0) }}
                   </div>
-                  <div
-                    :class="[
-                      'absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white',
-                      member.isOnline ? 'bg-success-400' : 'bg-gray-300'
-                    ]"
-                  ></div>
                 </div>
                 <div class="text-xs font-medium text-gray-700 text-center truncate max-w-[60px]">
                   {{ member.displayName }}
@@ -768,16 +793,10 @@ function handleLogout() {
                 @click="viewMemberTasks(member)"
                 class="flex items-center p-3 rounded-xl bg-white/50 hover:bg-white/80 cursor-pointer hover-lift"
               >
-                <div class="relative">
+                <div>
                   <div class="w-10 h-10 rounded-full bg-gradient-to-br from-primary-400 to-secondary-400 flex items-center justify-center text-white font-bold">
                     {{ member.displayName.charAt(0) }}
                   </div>
-                  <div
-                    :class="[
-                      'absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white',
-                      member.isOnline ? 'bg-success-400' : 'bg-gray-300'
-                    ]"
-                  ></div>
                 </div>
                 <div class="ml-3 flex-1">
                   <div class="font-medium text-gray-800 flex items-center">
@@ -788,9 +807,6 @@ function handleLogout() {
                     <el-tag v-if="member.id === authStore.memberId" size="small" type="primary" class="ml-2 !rounded-md">
                       我
                     </el-tag>
-                  </div>
-                  <div class="text-xs text-gray-400">
-                    {{ member.isOnline ? '在线' : '离线' }}
                   </div>
                 </div>
                 <el-icon class="text-gray-400"><ArrowRight /></el-icon>
@@ -1358,9 +1374,6 @@ function handleLogout() {
           </div>
           <div class="ml-3 sm:ml-4">
             <div class="font-semibold text-gray-800 text-sm sm:text-base">{{ selectedMember.displayName }}</div>
-            <div class="text-xs text-gray-500">
-              {{ selectedMember.isOnline ? '在线' : '离线' }}
-            </div>
           </div>
           <div class="ml-auto text-right">
             <div class="text-xl sm:text-2xl font-bold gradient-text">{{ memberProgress }}%</div>
