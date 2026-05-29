@@ -3,7 +3,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { createRoom, joinRoom } from '@/api/room'
-import { verifyToken } from '@/api/auth'
+import { verifyToken, useAuthCode } from '@/api/auth'
 import { useAuthStore } from '@/stores/auth'
 import { validateRoomCode } from '@/utils/roomCode'
 import { copyToClipboard } from '@/utils/clipboard'
@@ -29,6 +29,11 @@ const loading = ref(false)
 const showInviteDialog = ref(false)
 const inviteCode = ref('')
 
+// 授权码相关
+const showAuthCodeDialog = ref(false)
+const authCodeInput = ref('')
+const authCodeLoading = ref(false)
+
 // 检查 URL 中是否有邀请码
 const urlInviteCode = route.query.invite
 if (urlInviteCode) {
@@ -36,24 +41,22 @@ if (urlInviteCode) {
   inviteCode.value = urlInviteCode.toUpperCase()
 }
 
-// 页面加载时检查是否有有效的用户标识
+// 页面加载时通过 Cookie 验证用户身份
 onMounted(async () => {
-  const token = localStorage.getItem('token')
-  const roomCode = localStorage.getItem('roomCode')
-
-  if (token && roomCode) {
-    try {
-      // 验证 token 是否有效
-      const res = await verifyToken()
-      if (res.data) {
-        // token 有效，直接跳转到房间
-        router.replace(`/room/${roomCode}`)
+  try {
+    const res = await verifyToken()
+    if (res.data) {
+      // 用户已认证
+      authStore.setAuth(res.data)
+      if (res.data.inRoom && res.data.roomCode) {
+        // 自动跳转到房间
+        router.replace(`/room/${res.data.roomCode}`)
         return
       }
-    } catch (error) {
-      // token 无效，清除本地存储
-      authStore.clearAuth()
     }
+  } catch (error) {
+    // 未认证或 token 失效，显示首页
+    authStore.clearAuth()
   }
   checkingAuth.value = false
 })
@@ -134,6 +137,27 @@ function enterRoom() {
   showInviteDialog.value = false
   router.push(`/room/${inviteCode.value}`)
 }
+
+// 使用授权码
+async function handleUseAuthCode() {
+  if (!authCodeInput.value.trim()) {
+    ElMessage.warning('请输入授权码')
+    return
+  }
+
+  authCodeLoading.value = true
+  try {
+    const res = await useAuthCode(authCodeInput.value.trim())
+    authStore.setAuth(res.data)
+    ElMessage.success('授权码验证成功')
+    showAuthCodeDialog.value = false
+    router.push(`/room/${res.data.roomCode}`)
+  } catch (error) {
+    // 错误已在拦截器中处理
+  } finally {
+    authCodeLoading.value = false
+  }
+}
 </script>
 
 <template>
@@ -141,7 +165,7 @@ function enterRoom() {
   <div v-if="checkingAuth" class="min-h-screen flex items-center justify-center">
     <div class="text-center">
       <div class="loading-spinner mx-auto mb-4"></div>
-      <p class="text-gray-400">正在检查登录状态...</p>
+      <p class="text-gray-400">正在加载...</p>
     </div>
   </div>
 
@@ -257,6 +281,13 @@ function enterRoom() {
             创建房间
           </el-button>
         </div>
+
+        <!-- 授权码入口 -->
+        <div class="mt-4 pt-4 border-t border-gray-100 text-center">
+          <el-button link type="primary" @click="showAuthCodeDialog = true">
+            使用授权码加入
+          </el-button>
+        </div>
       </div>
 
       <!-- 底部提示 -->
@@ -319,6 +350,34 @@ function enterRoom() {
       <template #footer>
         <el-button type="primary" @click="enterRoom" class="!rounded-xl w-full sm:w-auto">
           进入房间
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 授权码弹窗 -->
+    <el-dialog
+      v-model="showAuthCodeDialog"
+      title="使用授权码加入"
+      width="450px"
+      class="mobile-dialog"
+    >
+      <div class="space-y-4">
+        <p class="text-gray-500 text-sm">输入房间成员分享的授权码，即可直接加入房间。</p>
+        <el-input
+          v-model="authCodeInput"
+          placeholder="请输入授权码"
+          size="large"
+          class="custom-input"
+        >
+          <template #prefix>
+            <el-icon><Key /></el-icon>
+          </template>
+        </el-input>
+      </div>
+      <template #footer>
+        <el-button @click="showAuthCodeDialog = false" class="!rounded-xl">取消</el-button>
+        <el-button type="primary" :loading="authCodeLoading" @click="handleUseAuthCode" class="!rounded-xl">
+          确认加入
         </el-button>
       </template>
     </el-dialog>

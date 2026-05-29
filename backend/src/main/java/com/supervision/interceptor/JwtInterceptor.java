@@ -34,7 +34,7 @@ public class JwtInterceptor implements HandlerInterceptor {
 
         response.setStatus(401);
         response.setContentType("application/json;charset=UTF-8");
-        response.getWriter().write("{\"code\":401,\"message\":\"未登录或登录已过期\"}");
+        response.getWriter().write("{\"code\":401,\"message\":\"身份验证失败\"}");
         return false;
     }
 }

@@ -3,6 +3,15 @@ CREATE DATABASE IF NOT EXISTS supervision_platform DEFAULT CHARACTER SET utf8mb4
 
 USE supervision_platform;
 
+-- 用户表
+CREATE TABLE IF NOT EXISTS `user` (
+    uid VARCHAR(36) PRIMARY KEY COMMENT '用户唯一标识(UUID)',
+    display_name VARCHAR(32) NOT NULL COMMENT '用户昵称',
+    deleted TINYINT DEFAULT 0 COMMENT '逻辑删除 0=未删除 1=已删除',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户表';
+
 -- 房间表
 CREATE TABLE IF NOT EXISTS room (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -17,12 +26,14 @@ CREATE TABLE IF NOT EXISTS room (
 -- 房间成员表
 CREATE TABLE IF NOT EXISTS room_member (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    uid VARCHAR(36) COMMENT '用户唯一标识',
     room_id BIGINT NOT NULL COMMENT '房间ID',
     display_name VARCHAR(32) NOT NULL COMMENT '自定义名称',
     is_admin TINYINT DEFAULT 0 COMMENT '是否为管理员 0=否 1=是',
     joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     is_online TINYINT DEFAULT 0 COMMENT '在线状态 0=离线 1=在线',
     INDEX idx_room_id (room_id),
+    INDEX idx_uid (uid),
     FOREIGN KEY (room_id) REFERENCES room(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='房间成员表';
 

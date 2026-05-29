@@ -9,18 +9,24 @@ import { getMyTodayTasks, getMemberTodayTasks, getMemberHistoryTasks, createTask
 import { uploadEvidence, getTaskEvidence, deleteEvidence } from '@/api/evidence'
 import { getTomorrowPlan, createTomorrowPlan } from '@/api/review'
 import { dissolveRoom, checkAdmin, leaveRoom } from '@/api/room'
+import { verifyToken, logout, generateAuthCode } from '@/api/auth'
 import { copyToClipboard } from '@/utils/clipboard'
 
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const roomStore = useRoomStore()
-const { on, send, close } = useWebSocket()
+const { on, send, connect, close } = useWebSocket()
 
 const roomCode = route.params.roomCode
 
 // 管理员相关
 const isAdmin = ref(false)
+
+// 授权码相关
+const showAuthCodeDialog = ref(false)
+const authCode = ref('')
+const authCodeLoading = ref(false)
 
 // 任务相关
 const showTaskDialog = ref(false)
@@ -138,6 +144,19 @@ const isLocked = computed(() => {
 })
 
 onMounted(async () => {
+  // 先验证身份，获取 authToken（刷新页面后内存中的 authToken 会丢失）
+  try {
+    const verifyRes = await verifyToken()
+    if (verifyRes.data) {
+      authStore.setAuth(verifyRes.data)
+    }
+  } catch (error) {
+    // 验证失败，跳转首页
+    authStore.clearAuth()
+    router.push('/')
+    return
+  }
+
   // 并行初始化，互不阻塞
   await Promise.allSettled([
     roomStore.fetchRoomInfo(roomCode),
@@ -146,13 +165,30 @@ onMounted(async () => {
     fetchRoomStatus(),
   ])
 
-  // 检查是否为管理员
-  try {
-    const res = await checkAdmin()
-    isAdmin.value = res.data
-  } catch (error) {
-    isAdmin.value = false
+  // 连接 WebSocket（authToken 已就绪）
+  connect()
+
+  // 检查房间是否已注销
+  if (roomStore.roomInfo && roomStore.roomInfo.status !== 1) {
+    ElMessageBox.alert(
+      '房间已被管理员注销，您将被退出房间。',
+      '房间已注销',
+      {
+        confirmButtonText: '确定',
+        type: 'warning',
+        showClose: false,
+        closeOnClickModal: false,
+        closeOnPressEscape: false,
+      }
+    ).then(() => {
+      authStore.clearAuth()
+      router.push('/')
+    })
+    return
   }
+
+  // 检查是否为管理员
+  isAdmin.value = authStore.isAdmin
 
   // WebSocket 事件监听
   on('member_online', (data) => {
@@ -641,6 +677,7 @@ async function handleDissolveRoom() {
     )
     await dissolveRoom()
     ElMessage.success('房间已注销')
+    try { await logout() } catch (e) { /* 忽略 */ }
     authStore.clearAuth()
     router.push('/')
   } catch (error) {
@@ -662,27 +699,46 @@ function goPlan() {
 
 // 退出房间（非管理员）
 function handleLogout() {
-  console.log('[handleLogout] 点击退出房间')
   ElMessageBox.confirm('确认退出房间？', '提示', {
     confirmButtonText: '确认退出',
     cancelButtonText: '取消',
     type: 'warning',
   }).then(async () => {
-    console.log('[handleLogout] 确认退出，发送API请求')
     try {
-      const res = await leaveRoom()
-      console.log('[handleLogout] 退出成功:', res)
+      await leaveRoom()
       ElMessage.success('已退出房间')
     } catch (e) {
-      console.error('[handleLogout] 退出房间API失败:', e)
-      ElMessage.warning('退出请求失败，但仍将离开房间')
+      console.error('退出房间API失败:', e)
     }
+    try { await logout() } catch (e) { /* 忽略 */ }
     close()
     authStore.clearAuth()
     router.push('/')
-  }).catch(() => {
-    console.log('[handleLogout] 用户取消退出')
-  })
+  }).catch(() => {})
+}
+
+// 获取授权码
+async function handleGenerateAuthCode() {
+  authCodeLoading.value = true
+  try {
+    const res = await generateAuthCode()
+    authCode.value = res.data.code
+    showAuthCodeDialog.value = true
+  } catch (error) {
+    // 错误已在拦截器中处理
+  } finally {
+    authCodeLoading.value = false
+  }
+}
+
+// 复制授权码
+async function copyAuthCode() {
+  const success = await copyToClipboard(authCode.value)
+  if (success) {
+    ElMessage.success('授权码已复制')
+  } else {
+    ElMessage.error('复制失败，请手动复制')
+  }
 }
 </script>
 
@@ -735,6 +791,9 @@ function handleLogout() {
                 </el-dropdown-item>
                 <el-dropdown-item @click="goReview">
                   <el-icon><Checked /></el-icon> 证据审核
+                </el-dropdown-item>
+                <el-dropdown-item divided @click="handleGenerateAuthCode">
+                  <el-icon><Key /></el-icon> 获取授权码
                 </el-dropdown-item>
                 <el-dropdown-item v-if="isAdmin" divided @click="handleDissolveRoom">
                   <el-icon><Delete /></el-icon> 注销房间
@@ -1504,6 +1563,38 @@ function handleLogout() {
 
       <template #footer>
         <el-button @click="showHistoryDialog = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 授权码弹窗 -->
+    <el-dialog
+      v-model="showAuthCodeDialog"
+      title="房间授权码"
+      width="480px"
+      class="mobile-dialog"
+    >
+      <div class="space-y-4">
+        <el-alert type="warning" :closable="false" show-icon>
+          <template #title>
+            <span class="font-semibold">妥善保管授权码，不要泄露给他人！</span>
+          </template>
+          <template #default>
+            <p class="text-sm mt-1">获得授权码的人可以直接加入你的房间。如需作废旧码，重新获取即可。</p>
+          </template>
+        </el-alert>
+
+        <div class="bg-gray-50 rounded-xl p-4 text-center">
+          <p class="text-gray-500 text-sm mb-2">您的授权码</p>
+          <div class="text-lg sm:text-xl font-mono font-bold gradient-text break-all select-all">
+            {{ authCode }}
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button type="primary" plain @click="copyAuthCode" class="!rounded-xl">
+          <el-icon class="mr-1"><CopyDocument /></el-icon> 复制授权码
+        </el-button>
+        <el-button @click="showAuthCodeDialog = false" class="!rounded-xl">关闭</el-button>
       </template>
     </el-dialog>
   </div>

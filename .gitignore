@@ -49,3 +49,8 @@ backend/target/
 
 # 敏感配置文件（包含密码等）
 *.yml.1
+
+# Claude Code 和方案文档
+CLAUDE.md
+方案.docx
+~$*.docx

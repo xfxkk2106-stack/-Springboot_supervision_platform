@@ -41,12 +41,12 @@ const router = createRouter({
 
 // 路由守卫
 router.beforeEach((to, from, next) => {
-  const token = localStorage.getItem('token')
+  const uid = localStorage.getItem('uid')
   const roomCode = localStorage.getItem('roomCode')
 
   // 需要认证的页面
   if (to.meta.requiresAuth) {
-    if (!token) {
+    if (!uid) {
       // 未登录，跳转到首页
       next('/')
       return

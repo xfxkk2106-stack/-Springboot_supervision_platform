@@ -7,6 +7,7 @@ import com.supervision.entity.Room;
 import com.supervision.entity.RoomMember;
 import com.supervision.service.RoomService;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
@@ -22,13 +23,13 @@ public class RoomController {
     private RoomService roomService;
 
     @PostMapping("/create")
-    public Result<Map<String, Object>> createRoom(@Valid @RequestBody RoomCreateDTO dto) {
-        return Result.success(roomService.createRoom(dto));
+    public Result<Map<String, Object>> createRoom(@Valid @RequestBody RoomCreateDTO dto, HttpServletResponse response) {
+        return Result.success(roomService.createRoom(dto, response));
     }
 
     @PostMapping("/join")
-    public Result<Map<String, Object>> joinRoom(@Valid @RequestBody RoomJoinDTO dto) {
-        return Result.success(roomService.joinRoom(dto));
+    public Result<Map<String, Object>> joinRoom(@Valid @RequestBody RoomJoinDTO dto, HttpServletResponse response) {
+        return Result.success(roomService.joinRoom(dto, response));
     }
 
     @GetMapping("/{roomCode}/info")

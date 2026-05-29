@@ -1,10 +1,11 @@
 package com.supervision.netty;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.supervision.config.JwtConfig;
 import com.supervision.entity.RoomMember;
 import com.supervision.mapper.RoomMemberMapper;
+import com.supervision.service.UserService;
 import io.netty.channel.*;
 import io.netty.handler.codec.http.*;
 import io.netty.handler.codec.http.websocketx.*;
@@ -78,32 +79,44 @@ public class NettyChannelHandler extends SimpleChannelInboundHandler<Object> {
             return;
         }
 
-        // 提取并验证 token
+        // 提取并验证 authToken
         String query = uri.getRawQuery();
-        String token = null;
+        String authToken = null;
         if (query != null) {
             for (String param : query.split("&")) {
                 if (param.startsWith("token=")) {
-                    token = param.substring(6);
+                    authToken = param.substring(6);
                     break;
                 }
             }
         }
 
-        if (token == null || token.isEmpty()) {
+        if (authToken == null || authToken.isEmpty()) {
             sendHttpResponse(ctx, request, new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.UNAUTHORIZED));
             return;
         }
 
-        JwtConfig jwtConfig = SpringContextHolder.getBean(JwtConfig.class);
-        if (!jwtConfig.validateToken(token)) {
+        // 通过 Redis 校验 authToken 获取 uid
+        UserService userService = SpringContextHolder.getBean(UserService.class);
+        String uid = userService.getUidByToken(authToken);
+        if (uid == null) {
             sendHttpResponse(ctx, request, new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.UNAUTHORIZED));
             return;
         }
 
-        Long memberId = jwtConfig.getMemberId(token);
-        Long roomId = jwtConfig.getRoomId(token);
-        String displayName = jwtConfig.getDisplayName(token);
+        // 查房间成员信息
+        RoomMemberMapper mapper = SpringContextHolder.getBean(RoomMemberMapper.class);
+        RoomMember member = mapper.selectOne(
+                new LambdaQueryWrapper<RoomMember>().eq(RoomMember::getUid, uid)
+        );
+        if (member == null) {
+            sendHttpResponse(ctx, request, new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.UNAUTHORIZED));
+            return;
+        }
+
+        Long memberId = member.getId();
+        Long roomId = member.getRoomId();
+        String displayName = member.getDisplayName();
 
         // 执行 WebSocket 握手
         WebSocketServerHandshakerFactory factory = new WebSocketServerHandshakerFactory(
@@ -129,12 +142,8 @@ public class NettyChannelHandler extends SimpleChannelInboundHandler<Object> {
 
         // 更新数据库在线状态
         try {
-            RoomMemberMapper mapper = SpringContextHolder.getBean(RoomMemberMapper.class);
-            RoomMember member = mapper.selectById(memberId);
-            if (member != null) {
-                member.setIsOnline(1);
-                mapper.updateById(member);
-            }
+            member.setIsOnline(1);
+            mapper.updateById(member);
         } catch (Exception e) {
             log.error("更新在线状态失败", e);
         }
@@ -144,13 +153,7 @@ public class NettyChannelHandler extends SimpleChannelInboundHandler<Object> {
         onlineData.put("memberId", memberId);
         onlineData.put("displayName", displayName);
         onlineData.put("roomId", roomId);
-        try {
-            RoomMemberMapper mapper = SpringContextHolder.getBean(RoomMemberMapper.class);
-            RoomMember newMember = mapper.selectById(memberId);
-            if (newMember != null) {
-                onlineData.put("isAdmin", newMember.getIsAdmin());
-            }
-        } catch (Exception e) {}
+        onlineData.put("isAdmin", member.getIsAdmin());
 
         Map<String, Object> onlineMsg = new HashMap<>();
         onlineMsg.put("type", "member_online");

@@ -5,21 +5,18 @@ import lombok.Data;
 import java.time.LocalDateTime;
 
 @Data
-@TableName("room_member")
-public class RoomMember {
-    @TableId(type = IdType.AUTO)
-    private Long id;
-
+@TableName("user")
+public class User {
+    @TableId(type = IdType.INPUT)
     private String uid;
-
-    private Long roomId;
 
     private String displayName;
 
-    private Integer isAdmin;
+    private Integer deleted;
 
     @TableField(fill = FieldFill.INSERT)
-    private LocalDateTime joinedAt;
+    private LocalDateTime createdAt;
 
-    private Integer isOnline;
+    @TableField(fill = FieldFill.INSERT_UPDATE)
+    private LocalDateTime updatedAt;
 }

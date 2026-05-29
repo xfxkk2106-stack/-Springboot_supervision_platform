@@ -32,9 +32,17 @@ public class RoomService {
     @Autowired
     private TaskService taskService;
 
-    public Map<String, Object> createRoom(RoomCreateDTO dto) {
+    @Autowired
+    private UserService userService;
+
+    public Map<String, Object> createRoom(RoomCreateDTO dto, jakarta.servlet.http.HttpServletResponse response) {
         // 生成唯一房间号
         String roomCode = generateUniqueRoomCode();
+
+        // 创建用户（生成 uid + authToken，存入 DB + Redis + Cookie）
+        Map<String, Object> userResult = userService.createUser(dto.getDisplayName(), response);
+        String uid = (String) userResult.get("uid");
+        String authToken = (String) userResult.get("authToken");
 
         // 创建房间
         Room room = new Room();
@@ -45,6 +53,7 @@ public class RoomService {
 
         // 创建管理员成员
         RoomMember admin = new RoomMember();
+        admin.setUid(uid);
         admin.setRoomId(room.getId());
         admin.setDisplayName(dto.getDisplayName());
         admin.setIsAdmin(1);
@@ -55,11 +64,9 @@ public class RoomService {
         room.setCreatorId(admin.getId());
         roomMapper.updateById(room);
 
-        // 生成 JWT
-        String token = jwtConfig.generateToken(admin.getId(), room.getId(), dto.getDisplayName());
-
         Map<String, Object> result = new HashMap<>();
-        result.put("token", token);
+        result.put("uid", uid);
+        result.put("authToken", authToken);
         result.put("memberId", admin.getId());
         result.put("roomId", room.getId());
         result.put("roomCode", roomCode);
@@ -68,7 +75,7 @@ public class RoomService {
         return result;
     }
 
-    public Map<String, Object> joinRoom(RoomJoinDTO dto) {
+    public Map<String, Object> joinRoom(RoomJoinDTO dto, jakarta.servlet.http.HttpServletResponse response) {
         String roomCode = dto.getRoomCode().toUpperCase();
 
         // 查找房间
@@ -83,19 +90,23 @@ public class RoomService {
             throw new BusinessException("房间已关闭");
         }
 
+        // 创建用户（生成 uid + authToken，存入 DB + Redis + Cookie）
+        Map<String, Object> userResult = userService.createUser(dto.getDisplayName(), response);
+        String uid = (String) userResult.get("uid");
+        String authToken = (String) userResult.get("authToken");
+
         // 添加成员
         RoomMember member = new RoomMember();
+        member.setUid(uid);
         member.setRoomId(room.getId());
         member.setDisplayName(dto.getDisplayName());
         member.setIsAdmin(0);
         member.setIsOnline(1);
         roomMemberMapper.insert(member);
 
-        // 生成 JWT
-        String token = jwtConfig.generateToken(member.getId(), room.getId(), dto.getDisplayName());
-
         Map<String, Object> result = new HashMap<>();
-        result.put("token", token);
+        result.put("uid", uid);
+        result.put("authToken", authToken);
         result.put("memberId", member.getId());
         result.put("roomId", room.getId());
         result.put("roomCode", roomCode);
@@ -139,10 +150,6 @@ public class RoomService {
             throw new BusinessException("只有管理员可以注销房间");
         }
 
-        // 关闭房间
-        room.setStatus(0);
-        roomMapper.updateById(room);
-
         // 通知所有成员房间已注销
         String roomCode = room.getRoomCode();
         try {
@@ -155,6 +162,21 @@ public class RoomService {
         } catch (Exception e) {
             // 忽略关闭失败
         }
+
+        // 删除所有成员记录并清理 Redis token
+        List<RoomMember> members = roomMemberMapper.selectByRoomCode(roomCode);
+        for (RoomMember member : members) {
+            if (member.getUid() != null) {
+                userService.cleanupUserTokens(member.getUid());
+            }
+        }
+        roomMemberMapper.delete(
+                new LambdaQueryWrapper<RoomMember>().eq(RoomMember::getRoomId, roomId)
+        );
+
+        // 关闭房间
+        room.setStatus(0);
+        roomMapper.updateById(room);
     }
 
     /**
@@ -171,6 +193,11 @@ public class RoomService {
 
         // 删除成员记录
         roomMemberMapper.deleteById(memberId);
+
+        // 清理该 uid 的 Redis token
+        if (member.getUid() != null) {
+            userService.cleanupUserTokens(member.getUid());
+        }
 
         // 通知房间内其他成员（使用 member_left 区分主动退出和断线）
         String roomCode = roomMapper.selectById(roomId).getRoomCode();

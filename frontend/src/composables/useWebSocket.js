@@ -1,4 +1,4 @@
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onUnmounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 
 export function useWebSocket() {
@@ -9,10 +9,19 @@ export function useWebSocket() {
   let intentionalClose = false
 
   function connect() {
-    if (!authStore.isLoggedIn) return
+    if (!authStore.isLoggedIn || !authStore.authToken) {
+      console.warn('WebSocket 连接失败: 缺少 authToken')
+      return
+    }
+
+    // 关闭已有连接
+    if (socket.value) {
+      socket.value.close()
+    }
 
     const wsHost = window.location.hostname
-    const wsUrl = `ws://${wsHost}:8081/ws/room/${authStore.roomCode}?token=${authStore.token}`
+    const wsUrl = `ws://${wsHost}:8081/ws/room/${authStore.roomCode}?token=${authStore.authToken}`
+    console.log('WebSocket 正在连接:', wsUrl)
     socket.value = new WebSocket(wsUrl)
     intentionalClose = false
 
@@ -68,12 +77,6 @@ export function useWebSocket() {
       socket.value = null
     }
   }
-
-  onMounted(() => {
-    if (authStore.isLoggedIn) {
-      connect()
-    }
-  })
 
   onUnmounted(() => {
     close()
