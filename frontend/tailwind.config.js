@@ -71,7 +71,7 @@ export default {
         }
       },
       fontFamily: {
-        sans: ['KaiTi', '楷体', 'Inter', 'Noto Sans SC', 'system-ui', '-apple-system', 'sans-serif'],
+        sans: ['KaiTi', '楷体', 'LXGW WenKai', 'Inter', 'Noto Sans SC', 'system-ui', '-apple-system', 'sans-serif'],
       },
       boxShadow: {
         'soft': '0 2px 15px -3px rgba(0, 0, 0, 0.07), 0 10px 20px -2px rgba(0, 0, 0, 0.04)',

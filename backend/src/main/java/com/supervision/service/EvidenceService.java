@@ -106,6 +106,11 @@ public class EvidenceService {
             throw new BusinessException("不能审核自己的学习证据");
         }
 
+        // 已通过的证据无需再审核
+        if (evidence.getStatus() == 1) {
+            throw new BusinessException("该证据已通过审核");
+        }
+
         // 更新证据状态
         evidence.setStatus(dto.getResult());
         evidenceMapper.updateById(evidence);

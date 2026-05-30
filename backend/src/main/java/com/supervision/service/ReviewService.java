@@ -71,6 +71,13 @@ public class ReviewService {
 
         LocalDate tomorrow = LocalDate.now().plusDays(1);
 
+        // 先删除已有明日计划（替换语义）
+        tomorrowPlanMapper.delete(
+                new LambdaQueryWrapper<TomorrowPlan>()
+                        .eq(TomorrowPlan::getMemberId, memberId)
+                        .eq(TomorrowPlan::getTaskDate, tomorrow)
+        );
+
         for (int i = 0; i < plans.size(); i++) {
             Map<String, String> plan = plans.get(i);
             TomorrowPlan tomorrowPlan = new TomorrowPlan();
@@ -92,6 +99,37 @@ public class ReviewService {
                         .eq(TomorrowPlan::getTaskDate, LocalDate.now().plusDays(1))
                         .orderByAsc(TomorrowPlan::getSortOrder)
         );
+    }
+
+    /**
+     * 更新单条明日计划
+     */
+    public List<TomorrowPlan> updateTomorrowPlan(Long memberId, Long planId, Map<String, String> planData) {
+        TomorrowPlan plan = tomorrowPlanMapper.selectById(planId);
+        if (plan == null || !plan.getMemberId().equals(memberId)) {
+            throw new BusinessException("计划不存在");
+        }
+        if (!plan.getTaskDate().equals(LocalDate.now().plusDays(1))) {
+            throw new BusinessException("只能修改明日计划");
+        }
+        plan.setSubject(planData.get("subject"));
+        plan.setTaskContent(planData.get("taskContent"));
+        tomorrowPlanMapper.updateById(plan);
+        return getTomorrowPlan(memberId);
+    }
+
+    /**
+     * 删除单条明日计划
+     */
+    public void deleteTomorrowPlan(Long memberId, Long planId) {
+        TomorrowPlan plan = tomorrowPlanMapper.selectById(planId);
+        if (plan == null || !plan.getMemberId().equals(memberId)) {
+            throw new BusinessException("计划不存在");
+        }
+        if (!plan.getTaskDate().equals(LocalDate.now().plusDays(1))) {
+            throw new BusinessException("只能删除明日计划");
+        }
+        tomorrowPlanMapper.deleteById(planId);
     }
 
     private boolean canCreateTomorrowPlan(Long memberId, Long roomId) {

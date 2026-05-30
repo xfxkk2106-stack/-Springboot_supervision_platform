@@ -49,3 +49,8 @@ export function cancelLeave() {
 export function getRoomStatus() {
   return request.get('/task/room-status')
 }
+
+// 获取计划状态（按钮可用性判断）
+export function getPlanStatus() {
+  return request.get('/task/plan-status')
+}

@@ -2,6 +2,7 @@ package com.supervision.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.supervision.common.BusinessException;
+import com.supervision.common.ResultCode;
 import com.supervision.dto.TaskCreateDTO;
 import com.supervision.entity.*;
 import com.supervision.mapper.*;
@@ -40,6 +41,17 @@ public class TaskService {
     private TomorrowPlanMapper tomorrowPlanMapper;
 
     public DailyTask createTask(Long memberId, TaskCreateDTO dto) {
+        // 检查今日是否有计划任务（fromPlan=1），如有则锁定不可添加
+        Long planTaskCount = taskMapper.selectCount(
+                new LambdaQueryWrapper<DailyTask>()
+                        .eq(DailyTask::getMemberId, memberId)
+                        .eq(DailyTask::getTaskDate, LocalDate.now())
+                        .eq(DailyTask::getFromPlan, 1)
+        );
+        if (planTaskCount > 0) {
+            throw new BusinessException(ResultCode.TASK_LOCKED, "今日计划已生效，不可添加新任务");
+        }
+
         DailyTask task = new DailyTask();
         task.setMemberId(memberId);
         task.setSubject(dto.getSubject());
@@ -140,6 +152,9 @@ public class TaskService {
         }
         if (task.getIsCompleted() == 1) {
             throw new BusinessException("已完成的任务不能删除");
+        }
+        if (task.getFromPlan() != null && task.getFromPlan() == 1) {
+            throw new BusinessException(ResultCode.TASK_LOCKED, "计划任务不可删除");
         }
         taskMapper.deleteById(taskId);
     }
@@ -268,12 +283,6 @@ public class TaskService {
         );
         hasTomorrowPlans = tomorrowPlanCount > 0;
 
-        // 全员完成且有明日计划 → 自动转换
-        if (allCompleted && hasTomorrowPlans) {
-            convertTomorrowToToday(roomId);
-            hasTomorrowPlans = false; // 转换后不再有明日计划
-        }
-
         Map<String, Object> result = new HashMap<>();
         result.put("allCompleted", allCompleted);
         result.put("hasTomorrowPlans", hasTomorrowPlans);
@@ -322,6 +331,7 @@ public class TaskService {
                 task.setIsCompleted(0);
                 task.setTaskDate(today);
                 task.setSortOrder(i);
+                task.setFromPlan(1);
                 taskMapper.insert(task);
             }
 
@@ -386,23 +396,137 @@ public class TaskService {
             memberStatusList.add(status);
         }
 
-        // 全员完成时自动将明日计划转为今日任务
-        if (allCompleted) {
-            Long tomorrowPlanCount = tomorrowPlanMapper.selectCount(
-                    new LambdaQueryWrapper<TomorrowPlan>()
-                            .eq(TomorrowPlan::getTaskDate, today.plusDays(1))
-                            .in(TomorrowPlan::getMemberId, members.stream().map(RoomMember::getId).toList())
-            );
-            if (tomorrowPlanCount > 0) {
-                convertTomorrowToToday(roomId);
-            }
-        }
-
         Map<String, Object> roomStatus = new HashMap<>();
         roomStatus.put("allCompleted", allCompleted);
         roomStatus.put("hasTomorrowPlans", false);
         roomStatus.put("members", memberStatusList);
         return roomStatus;
+    }
+
+    /**
+     * 获取计划状态（供前端判断按钮状态）
+     */
+    public Map<String, Object> getPlanStatus(Long memberId, Long roomId) {
+        LocalDate today = LocalDate.now();
+
+        // 检查用户是否有今日任务
+        List<DailyTask> myTasks = taskMapper.selectByMemberAndDate(memberId, today);
+        boolean hasTodayTasks = !myTasks.isEmpty();
+
+        // 检查用户是否有明日计划
+        Long planCount = tomorrowPlanMapper.selectCount(
+                new LambdaQueryWrapper<TomorrowPlan>()
+                        .eq(TomorrowPlan::getMemberId, memberId)
+                        .eq(TomorrowPlan::getTaskDate, today.plusDays(1))
+        );
+        boolean hasTomorrowPlans = planCount > 0;
+
+        // 检查其他成员是否全部完成
+        List<RoomMember> members = roomMemberMapper.selectList(
+                new LambdaQueryWrapper<RoomMember>().eq(RoomMember::getRoomId, roomId)
+        );
+        boolean allOthersCompleted = true;
+        for (RoomMember m : members) {
+            if (m.getId().equals(memberId)) continue;
+            boolean onLeave = dailyLeaveMapper.selectCount(
+                    new LambdaQueryWrapper<DailyLeave>()
+                            .eq(DailyLeave::getMemberId, m.getId())
+                            .eq(DailyLeave::getLeaveDate, today)
+            ) > 0;
+            if (onLeave) continue;
+            List<DailyTask> tasks = taskMapper.selectByMemberAndDate(m.getId(), today);
+            boolean memberDone = !tasks.isEmpty() && tasks.stream().allMatch(t -> t.getIsCompleted() == 1);
+            if (!memberDone) {
+                allOthersCompleted = false;
+                break;
+            }
+        }
+
+        // 检查自身任务是否全部完成
+        boolean myTasksAllDone = hasTodayTasks && myTasks.stream().allMatch(t -> t.getIsCompleted() == 1);
+
+        // 检查是否请假
+        boolean onLeave = isOnLeave(memberId);
+
+        // 判断能力（请假用户需等全员完成才可制定计划）
+        boolean canCreatePlan = (myTasksAllDone || onLeave) && allOthersCompleted;
+        boolean canAddTask = !hasTodayTasks;
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("hasTodayTasks", hasTodayTasks);
+        result.put("hasTomorrowPlans", hasTomorrowPlans);
+        result.put("allOthersCompleted", allOthersCompleted);
+        result.put("myTasksAllDone", myTasksAllDone);
+        result.put("canCreatePlan", canCreatePlan);
+        result.put("canAddTask", canAddTask);
+        return result;
+    }
+
+    /**
+     * 凌晨转换所有房间的明日计划为今日任务
+     */
+    public void midnightConvertAllRooms() {
+        List<Room> rooms = roomMapper.selectList(
+                new LambdaQueryWrapper<Room>().eq(Room::getStatus, 1)
+        );
+        LocalDate today = LocalDate.now();
+        // 0 点时 today 已是新的一天，昨日的"明日计划"的 taskDate = today
+        for (Room room : rooms) {
+            try {
+                List<RoomMember> members = roomMemberMapper.selectList(
+                        new LambdaQueryWrapper<RoomMember>().eq(RoomMember::getRoomId, room.getId())
+                );
+                for (RoomMember member : members) {
+                    // 跳过已有今日任务的成员
+                    List<DailyTask> existingTasks = taskMapper.selectByMemberAndDate(member.getId(), today);
+                    if (!existingTasks.isEmpty()) {
+                        // 仍删除今日的计划记录（已不需要）
+                        tomorrowPlanMapper.delete(
+                                new LambdaQueryWrapper<TomorrowPlan>()
+                                        .eq(TomorrowPlan::getMemberId, member.getId())
+                                        .eq(TomorrowPlan::getTaskDate, today)
+                        );
+                        continue;
+                    }
+
+                    // 获取该成员的计划（taskDate = today，即昨日创建的明日计划）
+                    List<TomorrowPlan> plans = tomorrowPlanMapper.selectList(
+                            new LambdaQueryWrapper<TomorrowPlan>()
+                                    .eq(TomorrowPlan::getMemberId, member.getId())
+                                    .eq(TomorrowPlan::getTaskDate, today)
+                                    .orderByAsc(TomorrowPlan::getSortOrder)
+                    );
+
+                    // 转为今日任务
+                    for (int i = 0; i < plans.size(); i++) {
+                        TomorrowPlan tp = plans.get(i);
+                        DailyTask task = new DailyTask();
+                        task.setMemberId(member.getId());
+                        task.setSubject(tp.getSubject());
+                        task.setTaskContent(tp.getTaskContent());
+                        task.setIsCompleted(0);
+                        task.setTaskDate(today);
+                        task.setSortOrder(i);
+                        task.setFromPlan(1);
+                        taskMapper.insert(task);
+                    }
+
+                    // 删除已转换的计划
+                    if (!plans.isEmpty()) {
+                        tomorrowPlanMapper.delete(
+                                new LambdaQueryWrapper<TomorrowPlan>()
+                                        .eq(TomorrowPlan::getMemberId, member.getId())
+                                        .eq(TomorrowPlan::getTaskDate, today)
+                        );
+                    }
+                }
+
+                // 通知房间
+                NettyWebSocketServer.sendToRoom(room.getRoomCode(), "tomorrow_converted", null);
+            } catch (Exception e) {
+                log.error("凌晨转换房间 {} 的明日计划失败", room.getId(), e);
+            }
+        }
     }
 
     private String getRoomCodeByMemberId(Long memberId) {

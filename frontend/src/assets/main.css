@@ -27,7 +27,7 @@ html {
 }
 
 body {
-  font-family: 'KaiTi', '楷体', 'Inter', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
+  font-family: 'KaiTi', '楷体', 'LXGW WenKai', 'Inter', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
   background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
   min-height: 100vh;
   color: #1a1a2e;

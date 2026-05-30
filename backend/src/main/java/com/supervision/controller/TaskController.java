@@ -96,4 +96,11 @@ public class TaskController {
         Long roomId = (Long) request.getAttribute("roomId");
         return Result.success(taskService.getRoomCompletionStatus(roomId));
     }
+
+    @GetMapping("/plan-status")
+    public Result<Map<String, Object>> getPlanStatus(HttpServletRequest request) {
+        Long memberId = (Long) request.getAttribute("memberId");
+        Long roomId = (Long) request.getAttribute("roomId");
+        return Result.success(taskService.getPlanStatus(memberId, roomId));
+    }
 }

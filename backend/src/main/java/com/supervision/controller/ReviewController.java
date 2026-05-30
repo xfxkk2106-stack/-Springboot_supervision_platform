@@ -46,4 +46,25 @@ public class ReviewController {
         Long memberId = (Long) request.getAttribute("memberId");
         return Result.success(reviewService.getTomorrowPlan(memberId));
     }
+
+    @GetMapping("/tomorrow/member/{memberId}")
+    public Result<List<TomorrowPlan>> getMemberTomorrowPlan(@PathVariable Long memberId) {
+        return Result.success(reviewService.getTomorrowPlan(memberId));
+    }
+
+    @PutMapping("/tomorrow/{id}")
+    public Result<List<TomorrowPlan>> updateTomorrowPlan(
+            @PathVariable Long id,
+            @RequestBody Map<String, String> body,
+            HttpServletRequest request) {
+        Long memberId = (Long) request.getAttribute("memberId");
+        return Result.success(reviewService.updateTomorrowPlan(memberId, id, body));
+    }
+
+    @DeleteMapping("/tomorrow/{id}")
+    public Result<?> deleteTomorrowPlan(@PathVariable Long id, HttpServletRequest request) {
+        Long memberId = (Long) request.getAttribute("memberId");
+        reviewService.deleteTomorrowPlan(memberId, id);
+        return Result.success();
+    }
 }

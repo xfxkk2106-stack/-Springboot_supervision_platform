@@ -1,5 +1,6 @@
 package com.supervision.task;
 
+import com.supervision.service.TaskService;
 import com.supervision.service.UserService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,6 +25,9 @@ public class UserCleanupTask {
 
     @Autowired
     private UserService userService;
+
+    @Autowired
+    private TaskService taskService;
 
     /**
      * 每小时执行一次，清理无有效 token 的用户
@@ -70,5 +74,15 @@ public class UserCleanupTask {
         }
 
         log.info("清理完成：扫描 {} 个用户，清理 {} 个", scanned, cleaned);
+    }
+
+    /**
+     * 每天 0 点执行，将明日计划转为今日任务
+     */
+    @Scheduled(cron = "0 0 0 * * ?")
+    public void midnightConvertPlans() {
+        log.info("开始凌晨转换明日计划为今日任务...");
+        taskService.midnightConvertAllRooms();
+        log.info("凌晨转换完成");
     }
 }

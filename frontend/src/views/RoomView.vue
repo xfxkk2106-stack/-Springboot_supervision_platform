@@ -5,9 +5,9 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { useRoomStore } from '@/stores/room'
 import { useWebSocket } from '@/composables/useWebSocket'
-import { getMyTodayTasks, getMemberTodayTasks, getMemberHistoryTasks, createTask, completeTask, deleteTask, requestLeave, cancelLeave, getRoomStatus } from '@/api/task'
+import { getMyTodayTasks, getMemberTodayTasks, getMemberHistoryTasks, createTask, completeTask, deleteTask, requestLeave, cancelLeave, getRoomStatus, getPlanStatus } from '@/api/task'
 import { uploadEvidence, getTaskEvidence, deleteEvidence } from '@/api/evidence'
-import { getTomorrowPlan, createTomorrowPlan } from '@/api/review'
+import { getTomorrowPlan, createTomorrowPlan, getMemberTomorrowPlan } from '@/api/review'
 import { dissolveRoom, checkAdmin, leaveRoom } from '@/api/room'
 import { verifyToken, logout, generateAuthCode } from '@/api/auth'
 import { copyToClipboard } from '@/utils/clipboard'
@@ -67,10 +67,8 @@ const evidenceList = ref([])
 // 明日计划
 const showTomorrowDialog = ref(false)
 const tomorrowPlans = ref([])
-const tomorrowForm = ref({
-  subject: '',
-  taskContent: '',
-})
+// 多科目组：[{id, subject, contentInputs: ['']}]
+const tomorrowGroups = ref([{ id: 1, subject: '', contentInputs: [''] }])
 
 // 我的今日任务
 const myTasks = ref([])
@@ -79,6 +77,7 @@ const myTasks = ref([])
 const showMemberTasksDialog = ref(false)
 const selectedMember = ref(null)
 const memberTasks = ref([])
+const memberTomorrowPlans = ref([])
 
 // 历史记录
 const showHistoryDialog = ref(false)
@@ -91,6 +90,7 @@ const loading = ref(false)
 // 请假相关
 const isOnLeave = ref(false)
 const roomStatus = ref(null)
+const planStatus = ref(null)
 
 // 我的任务按科目分组
 const myTasksBySubject = computed(() => {
@@ -104,6 +104,18 @@ const myTasksBySubject = computed(() => {
   return groups
 })
 
+// 明日计划按科目分组
+const tomorrowBySubject = computed(() => {
+  const groups = {}
+  tomorrowPlans.value.forEach(plan => {
+    if (!groups[plan.subject]) {
+      groups[plan.subject] = []
+    }
+    groups[plan.subject].push(plan)
+  })
+  return groups
+})
+
 // 成员任务按科目分组
 const memberTasksBySubject = computed(() => {
   const groups = {}
@@ -112,6 +124,18 @@ const memberTasksBySubject = computed(() => {
       groups[task.subject] = []
     }
     groups[task.subject].push(task)
+  })
+  return groups
+})
+
+// 成员明日计划按科目分组
+const memberTomorrowBySubject = computed(() => {
+  const groups = {}
+  memberTomorrowPlans.value.forEach(plan => {
+    if (!groups[plan.subject]) {
+      groups[plan.subject] = []
+    }
+    groups[plan.subject].push(plan)
   })
   return groups
 })
@@ -130,18 +154,37 @@ const memberProgress = computed(() => {
   return Math.round((completed / memberTasks.value.length) * 100)
 })
 
-// 是否可以制定明日计划
+// 是否可以制定明日计划（请假用户也需要其他人完成才能制定）
 const canCreateTomorrow = computed(() => {
-  if (isOnLeave.value) return true
-  if (!roomStatus.value) return false
-  return roomStatus.value.allCompleted
+  if (!planStatus.value) return false
+  return planStatus.value.canCreatePlan
 })
 
-// 是否被锁定（0点后有人未完成）
+// 是否被锁定（有成员未完成，包括自己）
 const isLocked = computed(() => {
-  if (!roomStatus.value) return false
-  return !roomStatus.value.allCompleted
+  if (!planStatus.value) return true  // 未获取到状态时默认锁定
+  // 自己未完成且未请假，或者其他成员未完成
+  const myselfDone = planStatus.value.myTasksAllDone || isOnLeave.value
+  return !myselfDone || !planStatus.value.allOthersCompleted
 })
+
+// 是否存在计划任务（fromPlan=1），锁定后不可添加/删除
+const hasPlanTasks = computed(() => {
+  return myTasks.value.some(t => t.fromPlan === 1)
+})
+
+// 是否可以添加今日任务（请假或有计划任务时不可添加）
+const canAddTask = computed(() => {
+  if (isOnLeave.value) return false
+  if (hasPlanTasks.value) return false
+  return true
+})
+
+// 制定计划按钮文案
+const planButtonLabel = computed(() => {
+  return '制定下次计划'
+})
+
 
 onMounted(async () => {
   // 先验证身份，获取 authToken（刷新页面后内存中的 authToken 会丢失）
@@ -163,6 +206,8 @@ onMounted(async () => {
     roomStore.fetchMembers(roomCode),
     fetchMyTasks(),
     fetchRoomStatus(),
+    fetchPlanStatus(),
+    fetchTomorrowPlans(),
   ])
 
   // 连接 WebSocket（authToken 已就绪）
@@ -251,21 +296,29 @@ onMounted(async () => {
     } else {
       fetchRoomStatus()
     }
+    fetchPlanStatus()
+    fetchTomorrowPlans()
   })
 
   on('member_leave_changed', (data) => {
     fetchRoomStatus()
+    fetchPlanStatus()
+    fetchTomorrowPlans()
   })
 
   on('tomorrow_converted', (data) => {
     fetchMyTasks()
     fetchRoomStatus()
-    ElMessage.info('明日计划已转为今日任务')
+    fetchPlanStatus()
+    fetchTomorrowPlans()
+    ElMessage.info('计划已转为今日任务')
   })
 
   on('task_created', (data) => {
     fetchMyTasks()
     fetchRoomStatus()
+    fetchPlanStatus()
+    fetchTomorrowPlans()
   })
 
   on('evidence_reviewed', (data) => {
@@ -284,6 +337,8 @@ onMounted(async () => {
     } else {
       fetchRoomStatus()
     }
+    fetchPlanStatus()
+    fetchTomorrowPlans()
   })
 
   on('room_dissolved', () => {
@@ -339,6 +394,26 @@ async function fetchRoomStatus() {
   }
 }
 
+// 获取计划状态
+async function fetchPlanStatus() {
+  try {
+    const res = await getPlanStatus()
+    planStatus.value = res.data
+  } catch (error) {
+    planStatus.value = null
+  }
+}
+
+// 获取明日计划列表
+async function fetchTomorrowPlans() {
+  try {
+    const res = await getTomorrowPlan()
+    tomorrowPlans.value = res.data || []
+  } catch {
+    tomorrowPlans.value = []
+  }
+}
+
 // 请假
 async function handleRequestLeave() {
   try {
@@ -382,10 +457,15 @@ async function viewMemberTasks(member) {
   selectedMember.value = member
   showMemberTasksDialog.value = true
   try {
-    const res = await getMemberTodayTasks(member.id)
-    memberTasks.value = res.data || []
+    const [tasksRes, plansRes] = await Promise.all([
+      getMemberTodayTasks(member.id),
+      getMemberTomorrowPlan(member.id)
+    ])
+    memberTasks.value = tasksRes.data || []
+    memberTomorrowPlans.value = plansRes.data || []
   } catch (error) {
     memberTasks.value = []
+    memberTomorrowPlans.value = []
   }
 }
 
@@ -506,6 +586,7 @@ async function handleCreateTask() {
     showTaskDialog.value = false
     selectedSubject.value = ''
     taskContentInputs.value = ['']
+    fetchPlanStatus()
   } catch (error) {
     // 错误已在拦截器中处理
   } finally {
@@ -613,33 +694,108 @@ async function handleDeleteTask(taskId) {
   }
 }
 
-// 添加明日计划
-function addTomorrowPlan() {
-  if (!tomorrowForm.value.subject.trim() || !tomorrowForm.value.taskContent.trim()) {
-    ElMessage.warning('请填写完整')
-    return
-  }
-  tomorrowPlans.value.push({ ...tomorrowForm.value })
-  tomorrowForm.value = { subject: '', taskContent: '' }
-}
-
 // 提交明日计划
 async function handleCreateTomorrow() {
-  if (tomorrowPlans.value.length === 0) {
-    ElMessage.warning('请至少添加一个明日计划')
+  // 收集所有有效计划
+  const plans = []
+  for (const group of tomorrowGroups.value) {
+    if (!group.subject) continue
+    const contents = group.contentInputs.filter(c => c.trim())
+    for (const c of contents) {
+      plans.push({ subject: group.subject, taskContent: c.trim() })
+    }
+  }
+  if (plans.length === 0) {
+    ElMessage.warning('请至少填写一个学习计划')
     return
   }
   loading.value = true
   try {
-    await createTomorrowPlan({ plans: tomorrowPlans.value })
-    ElMessage.success('明日计划创建成功')
+    await createTomorrowPlan({ plans })
+    ElMessage.success('计划保存成功')
     showTomorrowDialog.value = false
-    tomorrowPlans.value = []
+    tomorrowGroups.value = [{ id: 1, subject: '', contentInputs: [''] }]
+    await fetchPlanStatus()
+    await fetchTomorrowPlans()
   } catch (error) {
     // 错误已在拦截器中处理
   } finally {
     loading.value = false
   }
+}
+
+// 打开明日计划对话框
+async function openTomorrowDialog() {
+  showTomorrowDialog.value = true
+  try {
+    const res = await getTomorrowPlan()
+    const plans = res.data || []
+    if (plans.length > 0) {
+      // 按科目分组加载已有计划
+      const groups = {}
+      plans.forEach(p => {
+        if (!groups[p.subject]) groups[p.subject] = []
+        groups[p.subject].push(p.taskContent || '')
+      })
+      let id = 0
+      tomorrowGroups.value = Object.entries(groups).map(([subject, contents]) => ({
+        id: ++id,
+        subject,
+        contentInputs: [...contents, ''],
+      }))
+    } else {
+      tomorrowGroups.value = [{ id: 1, subject: '', contentInputs: [''] }]
+    }
+  } catch {
+    tomorrowGroups.value = [{ id: 1, subject: '', contentInputs: [''] }]
+  }
+}
+
+// 明日计划：科目组操作
+function addTomorrowGroup() {
+  const maxId = Math.max(0, ...tomorrowGroups.value.map(g => g.id))
+  tomorrowGroups.value.push({ id: maxId + 1, subject: '', contentInputs: [''] })
+}
+
+function removeTomorrowGroup(groupId) {
+  if (tomorrowGroups.value.length <= 1) return
+  tomorrowGroups.value = tomorrowGroups.value.filter(g => g.id !== groupId)
+}
+
+// 内容输入框变化（自动扩展）
+function onGroupContentInput(groupId, index) {
+  const group = tomorrowGroups.value.find(g => g.id === groupId)
+  if (!group) return
+  const val = group.contentInputs[index]
+  const list = [...group.contentInputs]
+  const isLast = index === list.length - 1
+
+  if (!val.trim()) {
+    // 删除空行（保留最后一行）
+    for (let i = index; i < list.length - 1; i++) {
+      list[i] = list[i + 1]
+    }
+    while (list.length > 1 && !list[list.length - 1].trim()) {
+      list.pop()
+    }
+    if (list[list.length - 1].trim()) {
+      list.push('')
+    }
+    group.contentInputs = list
+  } else if (isLast) {
+    group.contentInputs = [...list, '']
+  }
+}
+
+// 删除内容输入框
+function removeGroupContentInput(groupId, index) {
+  const group = tomorrowGroups.value.find(g => g.id === groupId)
+  if (!group || group.contentInputs.length <= 1) return
+  const newList = group.contentInputs.filter((_, i) => i !== index)
+  while (newList.length > 1 && !newList[newList.length - 1].trim()) {
+    newList.pop()
+  }
+  group.contentInputs = newList.length > 0 ? newList : ['']
 }
 
 // 复制邀请码
@@ -878,26 +1034,28 @@ async function copyAuthCode() {
             <h2 class="text-lg font-semibold text-gray-800 mb-4">快捷操作</h2>
             <div class="space-y-3">
               <el-button
+                v-if="!hasPlanTasks"
                 type="primary"
                 class="w-full !rounded-xl !h-12"
                 @click="showTaskDialog = true"
+                :disabled="!canAddTask"
               >
                 <el-icon class="mr-2"><Plus /></el-icon>
                 添加今日任务
               </el-button>
               <el-tooltip
-                :content="isLocked ? '有成员未完成今日任务，无法制定明日计划' : ''"
+                :content="isLocked ? '有成员未完成今日任务，无法制定下次计划' : ''"
                 :disabled="!isLocked"
                 placement="top"
               >
                 <el-button
                   type="success"
                   class="w-full !rounded-xl !h-12"
-                  @click="showTomorrowDialog = true"
+                  @click="openTomorrowDialog"
                   :disabled="!canCreateTomorrow"
                 >
                   <el-icon class="mr-2"><Calendar /></el-icon>
-                  制定明日计划
+                  {{ planButtonLabel }}
                 </el-button>
               </el-tooltip>
               <el-button
@@ -932,13 +1090,13 @@ async function copyAuthCode() {
             </div>
           </div>
 
-          <!-- 房间锁定状态（有人未完成时显示） -->
-          <div v-if="isLocked && roomStatus" class="glass-card p-4 sm:p-6 mb-4 sm:mb-6 border-2 border-warning-200 bg-warning-50/50">
+          <!-- 房间成员状态 -->
+          <div v-if="roomStatus" class="glass-card p-4 sm:p-6 mb-4 sm:mb-6 border-2 border-warning-200 bg-warning-50/50">
             <div class="flex items-center mb-3">
               <el-icon class="text-xl text-warning-500 mr-2"><WarningFilled /></el-icon>
-              <h3 class="font-semibold text-gray-800">有成员未完成今日任务</h3>
+              <h3 class="font-semibold text-gray-800">{{ isLocked ? '有成员未完成今日任务' : '全员已完成' }}</h3>
             </div>
-            <p class="text-sm text-gray-500 mb-4">全员完成后才能进入明日计划学习</p>
+            <p v-if="isLocked" class="text-sm text-gray-500 mb-4">全员完成后才能{{ planButtonLabel }}</p>
             <div class="space-y-2">
               <div
                 v-for="m in roomStatus.members"
@@ -975,16 +1133,16 @@ async function copyAuthCode() {
 
           <!-- 移动端快捷操作按钮 -->
           <div class="flex lg:hidden gap-2 mb-4">
-            <el-button type="primary" class="flex-1 !rounded-xl !h-11" @click="showTaskDialog = true">
-              <el-icon class="mr-1"><Plus /></el-icon> 添加任务
+            <el-button v-if="!hasPlanTasks" type="primary" class="flex-1 !rounded-xl !h-11" @click="showTaskDialog = true" :disabled="!canAddTask">
+              <el-icon class="mr-1"><Plus /></el-icon> 添加今日任务
             </el-button>
             <el-tooltip
-              :content="isLocked ? '有成员未完成' : ''"
+              :content="isLocked ? '有成员未完成今日任务，无法制定下次计划' : ''"
               :disabled="!isLocked"
               placement="top"
             >
-              <el-button type="success" class="flex-1 !rounded-xl !h-11" @click="showTomorrowDialog = true" :disabled="!canCreateTomorrow">
-                <el-icon class="mr-1"><Calendar /></el-icon> 明日计划
+              <el-button type="success" class="flex-1 !rounded-xl !h-11" @click="openTomorrowDialog" :disabled="!canCreateTomorrow">
+                <el-icon class="mr-1"><Calendar /></el-icon> {{ planButtonLabel }}
               </el-button>
             </el-tooltip>
             <el-button type="warning" class="flex-1 !rounded-xl !h-11" @click="goReview">
@@ -992,11 +1150,52 @@ async function copyAuthCode() {
             </el-button>
           </div>
 
+          <!-- 明日计划 -->
+          <div v-if="tomorrowPlans.length > 0" class="glass-card p-4 sm:p-6 mobile-card mb-4">
+            <div class="flex items-center justify-between mb-4 sm:mb-6">
+              <h2 class="text-base sm:text-lg font-semibold text-gray-800">
+                <el-icon class="mr-1 text-primary-500"><Calendar /></el-icon>下次计划
+              </h2>
+              <el-button
+                type="primary"
+                size="small"
+                @click="openTomorrowDialog"
+                :disabled="!canCreateTomorrow"
+                class="!rounded-lg"
+              >
+                <el-icon class="mr-1"><Edit /></el-icon> 修改
+              </el-button>
+            </div>
+
+            <div class="space-y-4">
+              <div
+                v-for="(plans, subject) in tomorrowBySubject"
+                :key="subject"
+                class="animate-fade-in"
+              >
+                <div class="flex items-center mb-2">
+                  <div class="w-2 h-2 rounded-full bg-primary-400 mr-2"></div>
+                  <h3 class="font-semibold text-gray-700 text-sm">{{ subject }}</h3>
+                  <el-tag size="small" type="info" class="ml-2 !rounded-md">{{ plans.length }}项</el-tag>
+                </div>
+                <div class="space-y-1 ml-2 sm:ml-4">
+                  <div
+                    v-for="plan in plans"
+                    :key="plan.id"
+                    class="flex items-center p-2 sm:p-3 rounded-lg bg-primary-50/50 border border-primary-100"
+                  >
+                    <span class="text-xs sm:text-sm text-gray-700">{{ plan.taskContent }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- 我的任务列表 -->
           <div class="glass-card p-4 sm:p-6 mobile-card">
             <div class="flex items-center justify-between mb-4 sm:mb-6">
               <h2 class="text-base sm:text-lg font-semibold text-gray-800">我的学习计划</h2>
-              <div class="flex gap-2">
+              <div v-if="!hasPlanTasks" class="flex gap-2">
                 <el-button
                   size="small"
                   @click="handleRequestLeave"
@@ -1009,6 +1208,7 @@ async function copyAuthCode() {
                   type="primary"
                   size="small"
                   @click="showTaskDialog = true"
+                  :disabled="!canAddTask"
                   class="!rounded-lg"
                 >
                   <el-icon class="mr-1"><Plus /></el-icon>
@@ -1036,8 +1236,8 @@ async function copyAuthCode() {
               </div>
               <p class="text-gray-400 mb-4">还没有学习计划</p>
               <div class="flex gap-3 justify-center">
-                <el-button type="primary" @click="showTaskDialog = true" class="!rounded-xl">
-                  创建第一个任务
+                <el-button type="primary" @click="showTaskDialog = true" :disabled="!canAddTask" class="!rounded-xl">
+                  添加任务
                 </el-button>
                 <el-button @click="handleRequestLeave" :loading="loading" class="!rounded-xl">
                   今日请假
@@ -1071,17 +1271,11 @@ async function copyAuthCode() {
                         : 'bg-white hover-lift border border-gray-100'
                     ]"
                   >
-                    <el-checkbox
-                      :model-value="task.isCompleted === 1"
-                      @change="handleCompleteTask(task.id)"
-                      :disabled="task.isCompleted === 1"
-                      class="mr-2 sm:mr-3 flex-shrink-0"
-                    />
-
                     <div class="flex-1 min-w-0">
                       <div :class="['text-xs sm:text-sm break-words', task.isCompleted === 1 ? 'line-through text-gray-400' : 'text-gray-700']">
                         {{ task.taskContent }}
                       </div>
+                      <div v-if="task.fromPlan === 1" class="text-[10px] text-gray-400 mt-0.5">计划任务</div>
                     </div>
 
                     <div class="flex items-center gap-1 sm:gap-2 ml-2 flex-shrink-0">
@@ -1095,7 +1289,7 @@ async function copyAuthCode() {
                         <span class="hidden sm:inline">证据</span>
                       </el-button>
                       <el-button
-                        v-if="!task.isCompleted"
+                        v-if="!task.isCompleted && task.fromPlan !== 1 && !hasPlanTasks"
                         size="small"
                         type="danger"
                         @click="handleDeleteTask(task.id)"
@@ -1335,85 +1529,122 @@ async function copyAuthCode() {
     <!-- 明日计划对话框 -->
     <el-dialog
       v-model="showTomorrowDialog"
-      title="制定明日计划"
-      width="600px"
+      :title="planButtonLabel"
+      width="560px"
       class="mobile-dialog"
     >
       <div class="space-y-4">
         <el-alert
-          title="请认真制定明日计划，这是必填项"
-          type="info"
+          title="请慎重安排任务，0 点过后即生效，计划生效后将不可更改"
+          type="warning"
           :closable="false"
           show-icon
           class="!rounded-xl"
         />
 
-        <!-- 已添加的明日计划 -->
-        <div v-if="tomorrowPlans.length > 0" class="space-y-2">
-          <div
-            v-for="(plan, index) in tomorrowPlans"
-            :key="index"
-            class="flex items-center p-3 bg-gray-50 rounded-xl"
+        <!-- 科目组列表 -->
+        <div
+          v-for="(group, gIdx) in tomorrowGroups"
+          :key="group.id"
+          class="p-4 rounded-xl border border-gray-200 bg-gray-50/50 space-y-3 relative"
+        >
+          <!-- 删除组按钮 -->
+          <el-button
+            v-if="tomorrowGroups.length > 1"
+            type="danger"
+            text
+            size="small"
+            @click="removeTomorrowGroup(group.id)"
+            class="absolute top-2 right-2"
           >
-            <div class="flex-1">
-              <div class="text-sm font-medium text-gray-700">{{ plan.subject }}</div>
-              <div class="text-xs text-gray-500">{{ plan.taskContent }}</div>
+            <el-icon><Delete /></el-icon>
+          </el-button>
+
+          <div class="text-xs text-gray-400 font-medium">科目 {{ gIdx + 1 }}</div>
+
+          <!-- 科目选择 -->
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <label class="text-sm font-medium text-gray-700">科目名称</label>
+              <el-button
+                type="primary"
+                link
+                size="small"
+                @click="showSubjectDialog = true"
+              >
+                <el-icon class="mr-1"><Setting /></el-icon>
+                管理科目
+              </el-button>
             </div>
-            <el-button
-              size="small"
-              type="danger"
-              plain
-              @click="tomorrowPlans.splice(index, 1)"
-              class="!rounded-lg"
+            <el-select
+              v-model="group.subject"
+              placeholder="请选择科目"
+              size="large"
+              class="w-full"
+              filterable
+              allow-create
             >
-              <el-icon><Delete /></el-icon>
-            </el-button>
+              <el-option
+                v-for="s in subjects"
+                :key="s"
+                :label="s"
+                :value="s"
+              />
+            </el-select>
+          </div>
+
+          <!-- 学习内容输入框 -->
+          <div>
+            <label class="text-sm font-medium text-gray-700 mb-1 block">学习计划内容</label>
+            <div class="space-y-2">
+              <div
+                v-for="(content, cIdx) in group.contentInputs"
+                :key="cIdx"
+                class="flex items-center gap-2"
+              >
+                <el-input
+                  v-model="group.contentInputs[cIdx]"
+                  :placeholder="cIdx === 0 ? '输入学习计划内容...' : `计划 ${cIdx + 1}`"
+                  size="large"
+                  @input="onGroupContentInput(group.id, cIdx)"
+                >
+                  <template #prefix>
+                    <span class="text-xs text-gray-400 font-medium">{{ cIdx + 1 }}</span>
+                  </template>
+                </el-input>
+                <el-button
+                  v-if="group.contentInputs.length > 1 && (cIdx === 0 || group.contentInputs[cIdx - 1].trim())"
+                  type="danger"
+                  @click="removeGroupContentInput(group.id, cIdx)"
+                  class="!rounded-lg !px-3 flex-shrink-0"
+                >
+                  <el-icon><Delete /></el-icon>
+                </el-button>
+              </div>
+            </div>
           </div>
         </div>
 
-        <!-- 添加明日计划表单 -->
-        <div class="p-4 bg-gray-50 rounded-xl space-y-3">
-          <el-select
-            v-model="tomorrowForm.subject"
-            placeholder="选择科目"
-            size="large"
-            class="w-full"
-            filterable
-            allow-create
-          >
-            <el-option
-              v-for="s in subjects"
-              :key="s"
-              :label="s"
-              :value="s"
-            />
-          </el-select>
-          <el-input
-            v-model="tomorrowForm.taskContent"
-            type="textarea"
-            :rows="2"
-            placeholder="学习计划内容"
-          />
-          <el-button
-            type="primary"
-            plain
-            @click="addTomorrowPlan"
-            class="w-full !rounded-xl"
-          >
-            <el-icon class="mr-1"><Plus /></el-icon>
-            添加到明日计划
-          </el-button>
-        </div>
+        <!-- 添加科目组按钮 -->
+        <el-button
+          type="primary"
+          text
+          class="w-full !border !border-dashed !border-primary-300 !rounded-xl !h-12"
+          @click="addTomorrowGroup"
+        >
+          <el-icon class="mr-1"><Plus /></el-icon>
+          添加科目
+        </el-button>
       </div>
       <template #footer>
-        <el-button @click="showTomorrowDialog = false">取消</el-button>
+        <el-button @click="showTomorrowDialog = false" class="!flex-1 sm:!flex-none">取消</el-button>
         <el-button
           type="primary"
           :loading="loading"
-          :disabled="tomorrowPlans.length === 0"
           @click="handleCreateTomorrow"
+          class="!flex-1 sm:!flex-none"
         >
-          提交明日计划
+          提交
         </el-button>
       </template>
     </el-dialog>
@@ -1421,7 +1652,7 @@ async function copyAuthCode() {
     <!-- 查看成员任务对话框 -->
     <el-dialog
       v-model="showMemberTasksDialog"
-      :title="`${selectedMember?.displayName} 的今日计划`"
+      :title="`${selectedMember?.displayName} 的学习计划`"
       width="600px"
       class="mobile-dialog"
     >
@@ -1490,6 +1721,34 @@ async function copyAuthCode() {
                 <span :class="['text-xs sm:text-sm break-words', task.isCompleted ? 'line-through text-gray-400' : 'text-gray-700']">
                   {{ task.taskContent }}
                 </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 下次计划 -->
+        <div v-if="memberTomorrowPlans.length > 0" class="mt-4 pt-4 border-t border-gray-200">
+          <h3 class="text-sm font-semibold text-gray-600 mb-3">
+            <el-icon class="mr-1 text-primary-500"><Calendar /></el-icon>下次计划
+          </h3>
+          <div class="space-y-3">
+            <div
+              v-for="(plans, subject) in memberTomorrowBySubject"
+              :key="subject"
+            >
+              <div class="flex items-center mb-1">
+                <div class="w-2 h-2 rounded-full bg-primary-400 mr-2"></div>
+                <h4 class="font-medium text-gray-700 text-xs">{{ subject }}</h4>
+                <el-tag size="small" type="info" class="ml-2 !rounded-md">{{ plans.length }}项</el-tag>
+              </div>
+              <div class="space-y-1 ml-2 sm:ml-4">
+                <div
+                  v-for="plan in plans"
+                  :key="plan.id"
+                  class="flex items-center p-2 rounded-lg bg-primary-50/50 border border-primary-100"
+                >
+                  <span class="text-xs text-gray-700">{{ plan.taskContent }}</span>
+                </div>
               </div>
             </div>
           </div>

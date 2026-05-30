@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS daily_task (
     task_date DATE NOT NULL COMMENT '计划日期',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     sort_order INT DEFAULT 0 COMMENT '排序',
+    from_plan TINYINT DEFAULT 0 COMMENT '是否来自明日计划 0=否 1=是',
     INDEX idx_member_date (member_id, task_date),
     INDEX idx_task_date (task_date),
     FOREIGN KEY (member_id) REFERENCES room_member(id) ON DELETE CASCADE,

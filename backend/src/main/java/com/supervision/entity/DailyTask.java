@@ -30,6 +30,8 @@ public class DailyTask {
 
     private Integer sortOrder;
 
+    private Integer fromPlan;
+
     // 非数据库字段
     @TableField(exist = false)
     private String displayName;

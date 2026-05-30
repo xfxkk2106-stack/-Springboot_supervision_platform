@@ -19,3 +19,18 @@ export function createTomorrowPlan(data) {
 export function getTomorrowPlan() {
   return request.get('/tomorrow/today')
 }
+
+// 获取指定成员的明日计划
+export function getMemberTomorrowPlan(memberId) {
+  return request.get(`/tomorrow/member/${memberId}`)
+}
+
+// 更新明日计划
+export function updateTomorrowPlan(id, data) {
+  return request.put(`/tomorrow/${id}`, data)
+}
+
+// 删除明日计划
+export function deleteTomorrowPlan(id) {
+  return request.delete(`/tomorrow/${id}`)
+}
