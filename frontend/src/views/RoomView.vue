@@ -1152,8 +1152,7 @@ async function copyAuthCode() {
           <!-- 房间成员状态 -->
           <div v-if="roomStatus" class="glass-card p-4 sm:p-6 mb-4 sm:mb-6 border-2 border-warning-200 bg-warning-50/50">
             <div class="flex items-center mb-3">
-              <el-icon class="text-xl text-warning-500 mr-2"><WarningFilled /></el-icon>
-              <h3 class="font-semibold text-gray-800">{{ isLocked ? '有成员未完成今日任务' : '全员已完成' }}</h3>
+              <h3 class="font-semibold text-gray-800">成员今日任务完成情况</h3>
             </div>
             <p v-if="isLocked" class="text-sm text-gray-500 mb-4">全员完成后才能{{ planButtonLabel }}</p>
             <div class="space-y-2">
