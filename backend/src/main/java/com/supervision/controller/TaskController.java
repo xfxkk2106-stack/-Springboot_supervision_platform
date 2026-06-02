@@ -94,6 +94,14 @@ public class TaskController {
     @GetMapping("/room-status")
     public Result<Map<String, Object>> getRoomStatus(HttpServletRequest request) {
         Long roomId = (Long) request.getAttribute("roomId");
+        if (roomId == null) {
+            // 用户不在房间中，返回空状态
+            return Result.success(Map.of(
+                "allCompleted", false,
+                "hasTomorrowPlans", false,
+                "members", List.of()
+            ));
+        }
         return Result.success(taskService.getRoomCompletionStatus(roomId));
     }
 
@@ -101,6 +109,28 @@ public class TaskController {
     public Result<Map<String, Object>> getPlanStatus(HttpServletRequest request) {
         Long memberId = (Long) request.getAttribute("memberId");
         Long roomId = (Long) request.getAttribute("roomId");
+        if (memberId == null || roomId == null) {
+            // 用户不在房间中，返回默认状态
+            return Result.success(Map.of(
+                "hasTodayTasks", false,
+                "hasTomorrowPlans", false,
+                "allOthersCompleted", false,
+                "myTasksAllDone", false,
+                "canCreatePlan", false,
+                "canAddTask", false,
+                "isFirstDay", false
+            ));
+        }
         return Result.success(taskService.getPlanStatus(memberId, roomId));
+    }
+
+    /**
+     * 测试接口：手动触发凌晨转换（仅用于测试）
+     * 会执行：1. 踢出没有明日计划的用户 2. 转换明日计划为今日任务
+     */
+    @PostMapping("/test/midnight-convert")
+    public Result<String> testMidnightConvert() {
+        taskService.testMidnightConvert();
+        return Result.success("凌晨转换已执行完成");
     }
 }

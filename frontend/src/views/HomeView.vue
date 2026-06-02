@@ -183,7 +183,11 @@ async function handleUseAuthCode() {
       <!-- 标题 -->
       <div class="text-center mb-6 sm:mb-8 animate-fade-in">
         <h1 class="text-3xl sm:text-4xl font-bold gradient-text mb-2">互相监督平台</h1>
-        <p class="text-gray-500 text-base sm:text-lg">一起学习，共同进步</p>
+        <div class="text-gray-500 text-base sm:text-lg leading-relaxed">
+          <p>于高山之巅，方见大河奔涌</p>
+          <p class="pl-8">于群峰之上，更觉长风浩荡。</p>
+          <p class="text-sm mt-2">——《人民日报》</p>
+        </div>
       </div>
 
       <!-- 选项卡 -->

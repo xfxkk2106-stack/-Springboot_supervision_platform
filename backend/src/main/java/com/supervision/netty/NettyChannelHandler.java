@@ -135,6 +135,7 @@ public class NettyChannelHandler extends SimpleChannelInboundHandler<Object> {
         info.put("roomId", roomId);
         info.put("displayName", displayName);
         info.put("roomCode", roomCode);
+        info.put("uid", uid);
         channelInfo.put(channel, info);
 
         // 添加到房间
@@ -332,6 +333,36 @@ public class NettyChannelHandler extends SimpleChannelInboundHandler<Object> {
             if (channel.isActive()) {
                 channel.writeAndFlush(new CloseWebSocketFrame(1000, "房间已注销"));
                 channel.close();
+            }
+        }
+    }
+
+    /**
+     * 发送消息给指定用户的连接，并关闭连接
+     */
+    void sendToUserAndClose(String uid, String type, Object data) {
+        Map<String, Object> message = new HashMap<>();
+        message.put("type", type);
+        message.put("data", data);
+
+        for (Map.Entry<Channel, Map<String, Object>> entry : channelInfo.entrySet()) {
+            Channel channel = entry.getKey();
+            Map<String, Object> info = entry.getValue();
+            String channelUid = (String) info.get("uid");
+
+            if (uid.equals(channelUid)) {
+                if (channel.isActive()) {
+                    try {
+                        String payload = objectMapper.writeValueAsString(message);
+                        channel.writeAndFlush(new TextWebSocketFrame(payload));
+                        // 延迟关闭连接，确保消息发送完成
+                        channel.eventLoop().schedule(() -> {
+                            channel.close();
+                        }, 1, java.util.concurrent.TimeUnit.SECONDS);
+                    } catch (Exception e) {
+                        log.error("发送消息给用户失败", e);
+                    }
+                }
             }
         }
     }

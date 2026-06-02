@@ -5,7 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { useRoomStore } from '@/stores/room'
 import { useWebSocket } from '@/composables/useWebSocket'
-import { getMyTodayTasks, getMemberTodayTasks, getMemberHistoryTasks, createTask, completeTask, deleteTask, requestLeave, cancelLeave, getRoomStatus, getPlanStatus } from '@/api/task'
+import { getMyTodayTasks, getMemberTodayTasks, getMemberHistoryTasks, createTask, completeTask, deleteTask, requestLeave, cancelLeave, getRoomStatus, getPlanStatus, testMidnightConvert } from '@/api/task'
 import { uploadEvidence, getTaskEvidence, deleteEvidence } from '@/api/evidence'
 import { getTomorrowPlan, createTomorrowPlan, getMemberTomorrowPlan } from '@/api/review'
 import { dissolveRoom, checkAdmin, leaveRoom } from '@/api/room'
@@ -173,16 +173,23 @@ const hasPlanTasks = computed(() => {
   return myTasks.value.some(t => t.fromPlan === 1)
 })
 
-// 是否可以添加今日任务（请假或有计划任务时不可添加）
+// 是否为首日（joinedAt 的日期等于今天）
+const isFirstDay = computed(() => {
+  if (!planStatus.value) return false
+  return planStatus.value.isFirstDay === true
+})
+
+// 是否可以添加今日任务（首日且无计划任务时才可添加）
 const canAddTask = computed(() => {
   if (isOnLeave.value) return false
   if (hasPlanTasks.value) return false
+  if (!isFirstDay.value) return false
   return true
 })
 
 // 制定计划按钮文案
 const planButtonLabel = computed(() => {
-  return '制定下次计划'
+  return '制定明日计划'
 })
 
 
@@ -301,7 +308,17 @@ onMounted(async () => {
   })
 
   on('member_leave_changed', (data) => {
-    fetchRoomStatus()
+    fetchMyTasks()
+    // 优先使用 WebSocket 广播中携带的房间状态（即时更新，无需额外 REST 请求）
+    if (data?.roomStatus) {
+      roomStatus.value = data.roomStatus
+      const myStatus = data.roomStatus.members?.find(m => m.memberId === authStore.memberId)
+      if (myStatus) {
+        isOnLeave.value = myStatus.isOnLeave
+      }
+    } else {
+      fetchRoomStatus()
+    }
     fetchPlanStatus()
     fetchTomorrowPlans()
   })
@@ -317,6 +334,22 @@ onMounted(async () => {
   on('task_created', (data) => {
     fetchMyTasks()
     fetchRoomStatus()
+    fetchPlanStatus()
+    fetchTomorrowPlans()
+  })
+
+  on('task_deleted', (data) => {
+    fetchMyTasks()
+    // 优先使用 WebSocket 广播中携带的房间状态（即时更新，无需额外 REST 请求）
+    if (data?.roomStatus) {
+      roomStatus.value = data.roomStatus
+      const myStatus = data.roomStatus.members?.find(m => m.memberId === authStore.memberId)
+      if (myStatus) {
+        isOnLeave.value = myStatus.isOnLeave
+      }
+    } else {
+      fetchRoomStatus()
+    }
     fetchPlanStatus()
     fetchTomorrowPlans()
   })
@@ -345,6 +378,30 @@ onMounted(async () => {
     ElMessageBox.alert(
       '房间已被管理员注销，您将被退出房间。',
       '房间已注销',
+      {
+        confirmButtonText: '确定',
+        type: 'warning',
+        showClose: false,
+        closeOnClickModal: false,
+        closeOnPressEscape: false,
+      }
+    ).then(() => {
+      authStore.clearAuth()
+      router.push('/')
+    }).catch(() => {
+      authStore.clearAuth()
+      router.push('/')
+    })
+  })
+
+  // 被踢出房间
+  on('member_kicked', (data) => {
+    const reason = data?.reason || '未填写明日计划'
+    // 先关闭 WebSocket 连接，防止自动重连
+    close()
+    ElMessageBox.alert(
+      `您因${reason}被踢出房间。`,
+      '已被踢出',
       {
         confirmButtonText: '确定',
         type: 'warning',
@@ -417,7 +474,7 @@ async function fetchTomorrowPlans() {
 // 请假
 async function handleRequestLeave() {
   try {
-    await ElMessageBox.confirm('请假后今日任务将被删除，确定请假？', '请假确认', {
+    await ElMessageBox.confirm('确定请假？', '请假确认', {
       confirmButtonText: '确认请假',
       cancelButtonText: '取消',
       type: 'warning',
@@ -425,7 +482,6 @@ async function handleRequestLeave() {
     loading.value = true
     await requestLeave()
     isOnLeave.value = true
-    myTasks.value = []
     await fetchRoomStatus()
     ElMessage.success('已请假')
   } catch (error) {
@@ -443,12 +499,44 @@ async function handleCancelLeave() {
     loading.value = true
     await cancelLeave()
     isOnLeave.value = false
+    await fetchMyTasks()
     await fetchRoomStatus()
     ElMessage.success('已取消请假')
   } catch (error) {
     // 错误已在拦截器中处理
   } finally {
     loading.value = false
+  }
+}
+
+// 测试：手动触发凌晨转换
+const testLoading = ref(false)
+async function handleTestMidnightConvert() {
+  try {
+    await ElMessageBox.confirm(
+      '此操作会模拟凌晨0点逻辑：\n1. 踢出没有明日计划的成员\n2. 将明日计划转换为今日任务\n\n确定执行？',
+      '测试凌晨转换',
+      {
+        confirmButtonText: '确定执行',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    )
+    testLoading.value = true
+    const res = await testMidnightConvert()
+    ElMessage.success(res.data || '凌晨转换已执行')
+    // 刷新页面数据
+    await Promise.all([
+      fetchMyTasks(),
+      fetchPlanStatus(),
+      fetchRoomStatus()
+    ])
+  } catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error('测试失败')
+    }
+  } finally {
+    testLoading.value = false
   }
 }
 
@@ -687,6 +775,8 @@ async function handleDeleteTask(taskId) {
     await deleteTask(taskId)
     myTasks.value = myTasks.value.filter(t => t.id !== taskId)
     ElMessage.success('任务已删除')
+    // 刷新房间状态，实时更新任务数量
+    await fetchRoomStatus()
   } catch (error) {
     if (error !== 'cancel') {
       // 错误已在拦截器中处理
@@ -1034,7 +1124,7 @@ async function copyAuthCode() {
             <h2 class="text-lg font-semibold text-gray-800 mb-4">快捷操作</h2>
             <div class="space-y-3">
               <el-button
-                v-if="!hasPlanTasks"
+                v-if="isFirstDay && !hasPlanTasks"
                 type="primary"
                 class="w-full !rounded-xl !h-12"
                 @click="showTaskDialog = true"
@@ -1044,7 +1134,7 @@ async function copyAuthCode() {
                 添加今日任务
               </el-button>
               <el-tooltip
-                :content="isLocked ? '有成员未完成今日任务，无法制定下次计划' : ''"
+                :content="isLocked ? '有成员未完成今日任务，无法制定明日计划' : ''"
                 :disabled="!isLocked"
                 placement="top"
               >
@@ -1065,6 +1155,16 @@ async function copyAuthCode() {
               >
                 <el-icon class="mr-2"><Checked /></el-icon>
                 审核证据
+              </el-button>
+              <!-- 测试按钮：模拟凌晨转换 -->
+              <el-button
+                type="danger"
+                class="w-full !rounded-xl !h-12"
+                @click="handleTestMidnightConvert"
+                :loading="testLoading"
+              >
+                <el-icon class="mr-2"><Warning /></el-icon>
+                测试凌晨转换
               </el-button>
             </div>
           </div>
@@ -1133,11 +1233,11 @@ async function copyAuthCode() {
 
           <!-- 移动端快捷操作按钮 -->
           <div class="flex lg:hidden gap-2 mb-4">
-            <el-button v-if="!hasPlanTasks" type="primary" class="flex-1 !rounded-xl !h-11" @click="showTaskDialog = true" :disabled="!canAddTask">
+            <el-button v-if="isFirstDay && !hasPlanTasks" type="primary" class="flex-1 !rounded-xl !h-11" @click="showTaskDialog = true" :disabled="!canAddTask">
               <el-icon class="mr-1"><Plus /></el-icon> 添加今日任务
             </el-button>
             <el-tooltip
-              :content="isLocked ? '有成员未完成今日任务，无法制定下次计划' : ''"
+              :content="isLocked ? '有成员未完成今日任务，无法制定明日计划' : ''"
               :disabled="!isLocked"
               placement="top"
             >
@@ -1154,7 +1254,7 @@ async function copyAuthCode() {
           <div v-if="tomorrowPlans.length > 0" class="glass-card p-4 sm:p-6 mobile-card mb-4">
             <div class="flex items-center justify-between mb-4 sm:mb-6">
               <h2 class="text-base sm:text-lg font-semibold text-gray-800">
-                <el-icon class="mr-1 text-primary-500"><Calendar /></el-icon>下次计划
+                <el-icon class="mr-1 text-primary-500"><Calendar /></el-icon>明日计划
               </h2>
               <el-button
                 type="primary"
@@ -1195,8 +1295,9 @@ async function copyAuthCode() {
           <div class="glass-card p-4 sm:p-6 mobile-card">
             <div class="flex items-center justify-between mb-4 sm:mb-6">
               <h2 class="text-base sm:text-lg font-semibold text-gray-800">我的学习计划</h2>
-              <div v-if="!hasPlanTasks" class="flex gap-2">
+              <div class="flex gap-2">
                 <el-button
+                  v-if="!isOnLeave"
                   size="small"
                   @click="handleRequestLeave"
                   :loading="loading"
@@ -1205,6 +1306,7 @@ async function copyAuthCode() {
                   请假
                 </el-button>
                 <el-button
+                  v-if="isFirstDay && !hasPlanTasks"
                   type="primary"
                   size="small"
                   @click="showTaskDialog = true"
@@ -1236,10 +1338,10 @@ async function copyAuthCode() {
               </div>
               <p class="text-gray-400 mb-4">还没有学习计划</p>
               <div class="flex gap-3 justify-center">
-                <el-button type="primary" @click="showTaskDialog = true" :disabled="!canAddTask" class="!rounded-xl">
+                <el-button v-if="isFirstDay" type="primary" @click="showTaskDialog = true" :disabled="!canAddTask" class="!rounded-xl">
                   添加任务
                 </el-button>
-                <el-button @click="handleRequestLeave" :loading="loading" class="!rounded-xl">
+                <el-button v-if="!isOnLeave" @click="handleRequestLeave" :loading="loading" class="!rounded-xl">
                   今日请假
                 </el-button>
               </div>
@@ -1726,10 +1828,10 @@ async function copyAuthCode() {
           </div>
         </div>
 
-        <!-- 下次计划 -->
+        <!-- 明日计划 -->
         <div v-if="memberTomorrowPlans.length > 0" class="mt-4 pt-4 border-t border-gray-200">
           <h3 class="text-sm font-semibold text-gray-600 mb-3">
-            <el-icon class="mr-1 text-primary-500"><Calendar /></el-icon>下次计划
+            <el-icon class="mr-1 text-primary-500"><Calendar /></el-icon>明日计划
           </h3>
           <div class="space-y-3">
             <div

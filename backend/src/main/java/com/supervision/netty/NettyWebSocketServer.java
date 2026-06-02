@@ -92,4 +92,13 @@ public class NettyWebSocketServer implements CommandLineRunner, DisposableBean {
             NettyChannelHandler.instance.closeRoom(roomCode);
         }
     }
+
+    /**
+     * 发送消息给指定用户并关闭连接
+     */
+    public static void sendToUser(String uid, String type, Object data) {
+        if (NettyChannelHandler.instance != null) {
+            NettyChannelHandler.instance.sendToUserAndClose(uid, type, data);
+        }
+    }
 }

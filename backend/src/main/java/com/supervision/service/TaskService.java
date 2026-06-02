@@ -14,7 +14,6 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.LocalTime;
 import java.util.*;
 
 @Service
@@ -157,10 +156,25 @@ public class TaskService {
             throw new BusinessException(ResultCode.TASK_LOCKED, "计划任务不可删除");
         }
         taskMapper.deleteById(taskId);
+
+        // 通知房间（携带 roomStatus）
+        try {
+            String roomCode = getRoomCodeByMemberId(memberId);
+            if (roomCode != null) {
+                Long roomId = getRoomIdByMemberId(memberId);
+                Map<String, Object> data = new HashMap<>();
+                data.put("memberId", memberId);
+                data.put("taskId", taskId);
+                data.put("roomStatus", calculateRoomStatus(roomId));
+                NettyWebSocketServer.sendToRoom(roomCode, "task_deleted", data);
+            }
+        } catch (Exception e) {
+            log.error("广播任务删除事件失败", e);
+        }
     }
 
     /**
-     * 请假：创建今日请假记录 + 自动删除今日任务
+     * 请假：创建今日请假记录（不删除任务）
      */
     public void requestLeave(Long memberId) {
         // 检查今天是否已请假
@@ -174,20 +188,14 @@ public class TaskService {
         leave.setLeaveDate(LocalDate.now());
         dailyLeaveMapper.insert(leave);
 
-        // 自动删除今日未完成的任务
-        List<DailyTask> todayTasks = taskMapper.selectByMemberAndDate(memberId, LocalDate.now());
-        for (DailyTask task : todayTasks) {
-            if (task.getIsCompleted() == 0) {
-                taskMapper.deleteById(task.getId());
-            }
-        }
-
-        // 通知房间
+        // 通知房间（携带 roomStatus）
         try {
             String roomCode = getRoomCodeByMemberId(memberId);
             if (roomCode != null) {
+                Long roomId = getRoomIdByMemberId(memberId);
                 Map<String, Object> data = new HashMap<>();
                 data.put("memberId", memberId);
+                data.put("roomStatus", calculateRoomStatus(roomId));
                 NettyWebSocketServer.sendToRoom(roomCode, "member_leave_changed", data);
             }
         } catch (Exception ignored) {
@@ -207,12 +215,14 @@ public class TaskService {
             throw new BusinessException("今天没有请假记录");
         }
 
-        // 通知房间
+        // 通知房间（携带 roomStatus）
         try {
             String roomCode = getRoomCodeByMemberId(memberId);
             if (roomCode != null) {
+                Long roomId = getRoomIdByMemberId(memberId);
                 Map<String, Object> data = new HashMap<>();
                 data.put("memberId", memberId);
+                data.put("roomStatus", calculateRoomStatus(roomId));
                 NettyWebSocketServer.sendToRoom(roomCode, "member_leave_changed", data);
             }
         } catch (Exception ignored) {
@@ -240,7 +250,6 @@ public class TaskService {
         );
         LocalDate today = LocalDate.now();
         boolean allCompleted = true;
-        boolean hasTomorrowPlans = false;
         List<Map<String, Object>> memberStatusList = new ArrayList<>();
 
         for (RoomMember member : members) {
@@ -255,22 +264,16 @@ public class TaskService {
                             .eq(DailyLeave::getLeaveDate, today)
             ) > 0;
 
-            if (onLeave) {
-                status.put("totalTasks", 0);
-                status.put("completedTasks", 0);
-                status.put("isOnLeave", true);
-                status.put("allDone", true);
-            } else {
-                List<DailyTask> tasks = taskMapper.selectByMemberAndDate(member.getId(), today);
-                long completed = tasks.stream().filter(t -> t.getIsCompleted() == 1).count();
-                boolean memberAllDone = !tasks.isEmpty() && completed == tasks.size();
-                status.put("totalTasks", tasks.size());
-                status.put("completedTasks", completed);
-                status.put("isOnLeave", false);
-                status.put("allDone", memberAllDone);
-                if (!memberAllDone) {
-                    allCompleted = false;
-                }
+            // 请假用户也显示实际任务数
+            List<DailyTask> tasks = taskMapper.selectByMemberAndDate(member.getId(), today);
+            long completed = tasks.stream().filter(t -> t.getIsCompleted() == 1).count();
+            boolean memberAllDone = !tasks.isEmpty() && completed == tasks.size();
+            status.put("totalTasks", tasks.size());
+            status.put("completedTasks", completed);
+            status.put("isOnLeave", onLeave);
+            status.put("allDone", onLeave || memberAllDone); // 请假用户视为完成
+            if (!onLeave && !memberAllDone) {
+                allCompleted = false;
             }
             memberStatusList.add(status);
         }
@@ -281,7 +284,7 @@ public class TaskService {
                         .eq(TomorrowPlan::getTaskDate, today.plusDays(1))
                         .in(TomorrowPlan::getMemberId, members.stream().map(RoomMember::getId).toList())
         );
-        hasTomorrowPlans = tomorrowPlanCount > 0;
+        boolean hasTomorrowPlans = tomorrowPlanCount > 0;
 
         Map<String, Object> result = new HashMap<>();
         result.put("allCompleted", allCompleted);
@@ -291,8 +294,9 @@ public class TaskService {
     }
 
     /**
-     * 将明日计划转为今日任务
+     * 将明日计划转为今日任务（手动转换，用于测试）
      */
+    @SuppressWarnings("unused")
     public void convertTomorrowToToday(Long roomId) {
         List<RoomMember> members = roomMemberMapper.selectList(
                 new LambdaQueryWrapper<RoomMember>().eq(RoomMember::getRoomId, roomId)
@@ -376,22 +380,16 @@ public class TaskService {
                             .eq(DailyLeave::getLeaveDate, today)
             ) > 0;
 
-            if (onLeave) {
-                status.put("totalTasks", 0);
-                status.put("completedTasks", 0);
-                status.put("isOnLeave", true);
-                status.put("allDone", true);
-            } else {
-                List<DailyTask> tasks = taskMapper.selectByMemberAndDate(m.getId(), today);
-                long completed = tasks.stream().filter(t -> t.getIsCompleted() == 1).count();
-                boolean memberAllDone = !tasks.isEmpty() && completed == tasks.size();
-                status.put("totalTasks", tasks.size());
-                status.put("completedTasks", completed);
-                status.put("isOnLeave", false);
-                status.put("allDone", memberAllDone);
-                if (!memberAllDone) {
-                    allCompleted = false;
-                }
+            // 请假用户也显示实际任务数
+            List<DailyTask> tasks = taskMapper.selectByMemberAndDate(m.getId(), today);
+            long completed = tasks.stream().filter(t -> t.getIsCompleted() == 1).count();
+            boolean memberAllDone = !tasks.isEmpty() && completed == tasks.size();
+            status.put("totalTasks", tasks.size());
+            status.put("completedTasks", completed);
+            status.put("isOnLeave", onLeave);
+            status.put("allDone", onLeave || memberAllDone); // 请假用户视为完成
+            if (!onLeave && !memberAllDone) {
+                allCompleted = false;
             }
             memberStatusList.add(status);
         }
@@ -452,6 +450,14 @@ public class TaskService {
         boolean canCreatePlan = (myTasksAllDone || onLeave) && allOthersCompleted;
         boolean canAddTask = !hasTodayTasks;
 
+        // 判断是否为首日（joinedAt 的日期等于今天）
+        RoomMember currentMember = roomMemberMapper.selectById(memberId);
+        boolean isFirstDay = false;
+        if (currentMember != null && currentMember.getJoinedAt() != null) {
+            LocalDate joinedDate = currentMember.getJoinedAt().toLocalDate();
+            isFirstDay = joinedDate.equals(today);
+        }
+
         Map<String, Object> result = new HashMap<>();
         result.put("hasTodayTasks", hasTodayTasks);
         result.put("hasTomorrowPlans", hasTomorrowPlans);
@@ -459,7 +465,89 @@ public class TaskService {
         result.put("myTasksAllDone", myTasksAllDone);
         result.put("canCreatePlan", canCreatePlan);
         result.put("canAddTask", canAddTask);
+        result.put("isFirstDay", isFirstDay);
         return result;
+    }
+
+    /**
+     * 测试用：模拟凌晨转换逻辑
+     * 与 midnightConvertAllRooms 相同，但使用 tomorrow 的日期检查计划
+     * （因为白天测试时，计划的 taskDate = tomorrow，而不是 today）
+     */
+    public void testMidnightConvert() {
+        List<Room> rooms = roomMapper.selectList(
+                new LambdaQueryWrapper<Room>().eq(Room::getStatus, 1)
+        );
+        LocalDate today = LocalDate.now();
+        LocalDate tomorrow = today.plusDays(1);
+
+        for (Room room : rooms) {
+            try {
+                // 第一步：先踢出没有填写明日计划的成员
+                // 测试时检查 taskDate = tomorrow（用户创建的明日计划）
+                kickMembersWithoutTomorrowPlan(room, tomorrow);
+
+                // 第二步：清除当天的任务（测试时，当天任务的 taskDate = today）
+                List<RoomMember> members = roomMemberMapper.selectList(
+                        new LambdaQueryWrapper<RoomMember>().eq(RoomMember::getRoomId, room.getId())
+                );
+                taskMapper.delete(
+                        new LambdaQueryWrapper<DailyTask>()
+                                .eq(DailyTask::getTaskDate, today)
+                                .in(DailyTask::getMemberId, members.stream().map(RoomMember::getId).toList())
+                );
+                log.info("房间 {} 已清除当天任务", room.getRoomCode());
+
+                // 第三步：转换剩余成员的计划为今日任务
+                for (RoomMember member : members) {
+                    // 获取该成员的明日计划（taskDate = tomorrow）
+                    List<TomorrowPlan> plans = tomorrowPlanMapper.selectList(
+                            new LambdaQueryWrapper<TomorrowPlan>()
+                                    .eq(TomorrowPlan::getMemberId, member.getId())
+                                    .eq(TomorrowPlan::getTaskDate, tomorrow)
+                                    .orderByAsc(TomorrowPlan::getSortOrder)
+                    );
+
+                    if (plans.isEmpty()) {
+                        continue;
+                    }
+
+                    // 转为今日任务
+                    for (int i = 0; i < plans.size(); i++) {
+                        TomorrowPlan tp = plans.get(i);
+                        DailyTask task = new DailyTask();
+                        task.setMemberId(member.getId());
+                        task.setSubject(tp.getSubject());
+                        task.setTaskContent(tp.getTaskContent());
+                        task.setIsCompleted(0);
+                        task.setTaskDate(today);
+                        task.setSortOrder(i);
+                        task.setFromPlan(1);
+                        taskMapper.insert(task);
+                    }
+
+                    // 删除已转换的计划
+                    tomorrowPlanMapper.delete(
+                            new LambdaQueryWrapper<TomorrowPlan>()
+                                    .eq(TomorrowPlan::getMemberId, member.getId())
+                                    .eq(TomorrowPlan::getTaskDate, tomorrow)
+                    );
+                }
+
+                // 第四步：清除所有成员的请假记录（凌晨自动销假）
+                dailyLeaveMapper.delete(
+                        new LambdaQueryWrapper<DailyLeave>()
+                                .eq(DailyLeave::getLeaveDate, today)
+                                .in(DailyLeave::getMemberId, members.stream().map(RoomMember::getId).toList())
+                );
+                log.info("房间 {} 已清除请假记录", room.getRoomCode());
+
+                // 通知房间
+                NettyWebSocketServer.sendToRoom(room.getRoomCode(), "tomorrow_converted", null);
+            } catch (Exception e) {
+                log.error("测试凌晨转换房间 {} 失败", room.getId(), e);
+            }
+        }
     }
 
     /**
@@ -473,22 +561,24 @@ public class TaskService {
         // 0 点时 today 已是新的一天，昨日的"明日计划"的 taskDate = today
         for (Room room : rooms) {
             try {
+                // 第一步：先踢出没有填写明日计划的成员
+                // 检查 taskDate = today 的计划（即昨天创建的明日计划）
+                kickMembersWithoutTomorrowPlan(room, today);
+
+                // 第二步：清除昨天的任务
                 List<RoomMember> members = roomMemberMapper.selectList(
                         new LambdaQueryWrapper<RoomMember>().eq(RoomMember::getRoomId, room.getId())
                 );
-                for (RoomMember member : members) {
-                    // 跳过已有今日任务的成员
-                    List<DailyTask> existingTasks = taskMapper.selectByMemberAndDate(member.getId(), today);
-                    if (!existingTasks.isEmpty()) {
-                        // 仍删除今日的计划记录（已不需要）
-                        tomorrowPlanMapper.delete(
-                                new LambdaQueryWrapper<TomorrowPlan>()
-                                        .eq(TomorrowPlan::getMemberId, member.getId())
-                                        .eq(TomorrowPlan::getTaskDate, today)
-                        );
-                        continue;
-                    }
+                LocalDate yesterday = today.minusDays(1);
+                taskMapper.delete(
+                        new LambdaQueryWrapper<DailyTask>()
+                                .eq(DailyTask::getTaskDate, yesterday)
+                                .in(DailyTask::getMemberId, members.stream().map(RoomMember::getId).toList())
+                );
+                log.info("房间 {} 已清除昨日任务", room.getRoomCode());
 
+                // 第三步：转换剩余成员的计划为今日任务
+                for (RoomMember member : members) {
                     // 获取该成员的计划（taskDate = today，即昨日创建的明日计划）
                     List<TomorrowPlan> plans = tomorrowPlanMapper.selectList(
                             new LambdaQueryWrapper<TomorrowPlan>()
@@ -521,6 +611,14 @@ public class TaskService {
                     }
                 }
 
+                // 第四步：清除所有成员的请假记录（凌晨自动销假）
+                dailyLeaveMapper.delete(
+                        new LambdaQueryWrapper<DailyLeave>()
+                                .eq(DailyLeave::getLeaveDate, yesterday)
+                                .in(DailyLeave::getMemberId, members.stream().map(RoomMember::getId).toList())
+                );
+                log.info("房间 {} 已清除昨日请假记录", room.getRoomCode());
+
                 // 通知房间
                 NettyWebSocketServer.sendToRoom(room.getRoomCode(), "tomorrow_converted", null);
             } catch (Exception e) {
@@ -529,10 +627,133 @@ public class TaskService {
         }
     }
 
+    /**
+     * 踢出未填写明日计划的用户
+     * @param room 房间
+     * @param planDate 要检查的计划日期（凌晨调用时传 today，测试时传 tomorrow）
+     */
+    private void kickMembersWithoutTomorrowPlan(Room room, LocalDate planDate) {
+        List<RoomMember> members = roomMemberMapper.selectList(
+                new LambdaQueryWrapper<RoomMember>().eq(RoomMember::getRoomId, room.getId())
+        );
+
+        // 收集需要踢出的成员
+        List<RoomMember> membersToKick = new ArrayList<>();
+        for (RoomMember member : members) {
+            // 检查是否有指定日期的计划
+            Long planCount = tomorrowPlanMapper.selectCount(
+                    new LambdaQueryWrapper<TomorrowPlan>()
+                            .eq(TomorrowPlan::getMemberId, member.getId())
+                            .eq(TomorrowPlan::getTaskDate, planDate)
+            );
+            if (planCount == 0) {
+                membersToKick.add(member);
+            }
+        }
+
+        // 踢出成员
+        for (RoomMember member : membersToKick) {
+            // 如果是管理员，需要转移管理员身份
+            if (member.getIsAdmin() == 1) {
+                transferAdmin(room, member.getId());
+            }
+
+            // 删除成员相关数据
+            cleanupMemberData(member.getId());
+
+            // 删除成员记录
+            roomMemberMapper.deleteById(member.getId());
+
+            // 通知被踢出的用户
+            try {
+                Map<String, Object> kickData = new HashMap<>();
+                kickData.put("memberId", member.getId());
+                kickData.put("reason", "未填写明日计划");
+                NettyWebSocketServer.sendToUser(member.getUid(), "member_kicked", kickData);
+            } catch (Exception e) {
+                log.warn("通知被踢出用户 {} 失败", member.getUid(), e);
+            }
+
+            log.info("用户 {} 因未填写明日计划被踢出房间 {}", member.getDisplayName(), room.getRoomCode());
+        }
+
+        // 如果房间没有成员了，注销房间
+        Long remainingCount = roomMemberMapper.selectCount(
+                new LambdaQueryWrapper<RoomMember>().eq(RoomMember::getRoomId, room.getId())
+        );
+        if (remainingCount == 0) {
+            room.setStatus(0);
+            roomMapper.updateById(room);
+            log.info("房间 {} 已无成员，自动注销", room.getRoomCode());
+        }
+    }
+
+    /**
+     * 转移管理员身份给下一个成员
+     */
+    private void transferAdmin(Room room, Long currentAdminId) {
+        List<RoomMember> members = roomMemberMapper.selectList(
+                new LambdaQueryWrapper<RoomMember>()
+                        .eq(RoomMember::getRoomId, room.getId())
+                        .ne(RoomMember::getId, currentAdminId)
+                        .orderByAsc(RoomMember::getJoinedAt)
+        );
+        if (!members.isEmpty()) {
+            RoomMember newAdmin = members.get(0);
+            newAdmin.setIsAdmin(1);
+            roomMemberMapper.updateById(newAdmin);
+            room.setCreatorId(newAdmin.getId());  // 使用 Long 类型的 id
+            roomMapper.updateById(room);
+            log.info("管理员身份已转移给用户 {}", newAdmin.getDisplayName());
+        }
+    }
+
+    /**
+     * 清理成员相关数据
+     */
+    private void cleanupMemberData(Long memberId) {
+        LocalDate today = LocalDate.now();
+
+        // 先删除证据记录（需要先获取任务ID）
+        List<DailyTask> tasks = taskMapper.selectByMemberAndDate(memberId, today);
+        for (DailyTask task : tasks) {
+            evidenceMapper.delete(
+                    new LambdaQueryWrapper<TaskEvidence>()
+                            .eq(TaskEvidence::getTaskId, task.getId())
+            );
+        }
+
+        // 删除今日任务
+        taskMapper.delete(
+                new LambdaQueryWrapper<DailyTask>()
+                        .eq(DailyTask::getMemberId, memberId)
+                        .eq(DailyTask::getTaskDate, today)
+        );
+
+        // 删除明日计划
+        tomorrowPlanMapper.delete(
+                new LambdaQueryWrapper<TomorrowPlan>()
+                        .eq(TomorrowPlan::getMemberId, memberId)
+                        .eq(TomorrowPlan::getTaskDate, today.plusDays(1))
+        );
+
+        // 删除请假记录
+        dailyLeaveMapper.delete(
+                new LambdaQueryWrapper<DailyLeave>()
+                        .eq(DailyLeave::getMemberId, memberId)
+                        .eq(DailyLeave::getLeaveDate, today)
+        );
+    }
+
     private String getRoomCodeByMemberId(Long memberId) {
         RoomMember member = roomMemberMapper.selectById(memberId);
         if (member == null) return null;
         Room room = roomMapper.selectById(member.getRoomId());
         return room != null ? room.getRoomCode() : null;
+    }
+
+    private Long getRoomIdByMemberId(Long memberId) {
+        RoomMember member = roomMemberMapper.selectById(memberId);
+        return member != null ? member.getRoomId() : null;
     }
 }
