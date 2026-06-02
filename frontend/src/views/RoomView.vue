@@ -5,7 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { useRoomStore } from '@/stores/room'
 import { useWebSocket } from '@/composables/useWebSocket'
-import { getMyTodayTasks, getMemberTodayTasks, getMemberHistoryTasks, createTask, completeTask, deleteTask, requestLeave, cancelLeave, getRoomStatus, getPlanStatus, testMidnightConvert } from '@/api/task'
+import { getMyTodayTasks, getMemberTodayTasks, getMemberHistoryTasks, createTask, completeTask, deleteTask, requestLeave, cancelLeave, getRoomStatus, getPlanStatus } from '@/api/task'
 import { uploadEvidence, getTaskEvidence, deleteEvidence } from '@/api/evidence'
 import { getTomorrowPlan, createTomorrowPlan, getMemberTomorrowPlan } from '@/api/review'
 import { dissolveRoom, checkAdmin, leaveRoom } from '@/api/room'
@@ -506,37 +506,6 @@ async function handleCancelLeave() {
     // 错误已在拦截器中处理
   } finally {
     loading.value = false
-  }
-}
-
-// 测试：手动触发凌晨转换
-const testLoading = ref(false)
-async function handleTestMidnightConvert() {
-  try {
-    await ElMessageBox.confirm(
-      '此操作会模拟凌晨0点逻辑：\n1. 踢出没有明日计划的成员\n2. 将明日计划转换为今日任务\n\n确定执行？',
-      '测试凌晨转换',
-      {
-        confirmButtonText: '确定执行',
-        cancelButtonText: '取消',
-        type: 'warning',
-      }
-    )
-    testLoading.value = true
-    const res = await testMidnightConvert()
-    ElMessage.success(res.data || '凌晨转换已执行')
-    // 刷新页面数据
-    await Promise.all([
-      fetchMyTasks(),
-      fetchPlanStatus(),
-      fetchRoomStatus()
-    ])
-  } catch (error) {
-    if (error !== 'cancel') {
-      ElMessage.error('测试失败')
-    }
-  } finally {
-    testLoading.value = false
   }
 }
 
@@ -1155,16 +1124,6 @@ async function copyAuthCode() {
               >
                 <el-icon class="mr-2"><Checked /></el-icon>
                 审核证据
-              </el-button>
-              <!-- 测试按钮：模拟凌晨转换 -->
-              <el-button
-                type="danger"
-                class="w-full !rounded-xl !h-12"
-                @click="handleTestMidnightConvert"
-                :loading="testLoading"
-              >
-                <el-icon class="mr-2"><Warning /></el-icon>
-                测试凌晨转换
               </el-button>
             </div>
           </div>

@@ -123,14 +123,4 @@ public class TaskController {
         }
         return Result.success(taskService.getPlanStatus(memberId, roomId));
     }
-
-    /**
-     * 测试接口：手动触发凌晨转换（仅用于测试）
-     * 会执行：1. 踢出没有明日计划的用户 2. 转换明日计划为今日任务
-     */
-    @PostMapping("/test/midnight-convert")
-    public Result<String> testMidnightConvert() {
-        taskService.testMidnightConvert();
-        return Result.success("凌晨转换已执行完成");
-    }
 }

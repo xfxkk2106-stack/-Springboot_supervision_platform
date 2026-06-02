@@ -54,8 +54,3 @@ export function getRoomStatus() {
 export function getPlanStatus() {
   return request.get('/task/plan-status')
 }
-
-// 测试接口：手动触发凌晨转换
-export function testMidnightConvert() {
-  return request.post('/task/test/midnight-convert')
-}
