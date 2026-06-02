@@ -1899,7 +1899,7 @@ async function copyAuthCode() {
             <span class="font-semibold">妥善保管授权码，不要泄露给他人！</span>
           </template>
           <template #default>
-            <p class="text-sm mt-1">获得授权码的人可以直接加入你的房间。如需作废旧码，重新获取即可。</p>
+            <p class="text-sm mt-1">获得授权码的人，可以如同你本人亲临房间，直接处理一切。如需作废旧码，重新获取即可。</p>
           </template>
         </el-alert>
 
